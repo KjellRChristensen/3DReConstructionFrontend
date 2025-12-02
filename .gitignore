@@ -77,3 +77,91 @@ fastlane/test_output
 *.env
 .env.*
 secrets/
+
+# ===========================================
+# Machine Learning / Large Files
+# ===========================================
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.h5
+*.hdf5
+*.keras
+*.pb
+*.onnx
+*.tflite
+*.mlmodel
+*.mlpackage/
+*.mlmodelc/
+
+# Hugging Face cache and models
+.cache/
+huggingface/
+transformers_cache/
+*.model
+
+# PyTorch / TensorFlow
+checkpoints/
+models/
+weights/
+saved_models/
+
+# Large data files
+*.npy
+*.npz
+*.pickle
+*.pkl
+*.parquet
+*.feather
+*.arrow
+
+# 3D model files (large)
+*.glb
+*.gltf
+*.obj
+*.stl
+*.fbx
+*.dae
+*.usdz
+*.usda
+*.usd
+*.ply
+*.ifc
+
+# Training data
+training_data/
+datasets/
+data/
+
+# Logs and outputs
+logs/
+outputs/
+runs/
+tensorboard/
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Large archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Video files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Large image datasets
+*.tfrecord
+*.lmdb/
