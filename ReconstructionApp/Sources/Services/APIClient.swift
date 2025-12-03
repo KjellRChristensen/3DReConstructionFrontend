@@ -827,6 +827,132 @@ actor APIClient {
         return try await performRequest(request)
     }
 
+    // MARK: - Training Management
+
+    func listDatasets() async throws -> DatasetsListResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    func downloadDataset(datasetId: String, sampleLimit: Int? = nil) async throws -> DatasetDownloadResponse {
+        let base = await baseURL
+        guard var urlComponents = URLComponents(string: "\(base)/training/datasets/\(datasetId)/download") else {
+            throw APIError.invalidURL
+        }
+
+        if let limit = sampleLimit {
+            urlComponents.queryItems = [
+                URLQueryItem(name: "sample_limit", value: String(limit))
+            ]
+        }
+
+        guard let url = urlComponents.url else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 3600 // 1 hour for large datasets
+
+        return try await performRequest(request)
+    }
+
+    func getDatasetStatus(datasetId: String) async throws -> TrainingDataset {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/\(datasetId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    func startTraining(config: TrainingConfig) async throws -> StartTrainingResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/start") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(config)
+
+        return try await performRequest(request)
+    }
+
+    func listTrainingJobs() async throws -> TrainingJobsResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/jobs") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    func getTrainingJob(jobId: String) async throws -> TrainingJob {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/jobs/\(jobId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    func stopTraining(jobId: String) async throws -> StartTrainingResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/jobs/\(jobId)/stop") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        return try await performRequest(request)
+    }
+
+    func listTrainedModels() async throws -> TrainedModelsResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/models") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    func deleteTrainedModel(modelId: String) async throws -> StartTrainingResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/models/\(modelId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        return try await performRequest(request)
+    }
+
     // MARK: - Private Helpers
 
     private func performRequest<T: Decodable>(_ request: URLRequest) async throws -> T {

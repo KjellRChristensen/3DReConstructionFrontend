@@ -562,3 +562,192 @@ struct VLMCodeResponse: Codable {
         case modelName = "model_name"
     }
 }
+
+// MARK: - Training Management Models
+
+struct TrainingDataset: Codable, Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let source: String
+    let size: String
+    let sampleCount: Int
+    let format: String
+    let license: String
+    let recommended: Bool
+    let downloaded: Bool
+    let downloadProgress: Double?
+    let localPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, source, size, format, license, recommended, downloaded
+        case sampleCount = "sample_count"
+        case downloadProgress = "download_progress"
+        case localPath = "local_path"
+    }
+}
+
+struct DatasetsListResponse: Codable {
+    let datasets: [TrainingDataset]
+    let downloadedCount: Int
+    let totalSize: String
+
+    enum CodingKeys: String, CodingKey {
+        case datasets
+        case downloadedCount = "downloaded_count"
+        case totalSize = "total_size"
+    }
+}
+
+struct DatasetDownloadResponse: Codable {
+    let success: Bool
+    let datasetId: String
+    let jobId: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case datasetId = "dataset_id"
+        case jobId = "job_id"
+        case message
+    }
+}
+
+struct TrainingConfig: Codable {
+    var datasetId: String
+    var baseModel: String
+    var epochs: Int
+    var batchSize: Int
+    var learningRate: Double
+    var loraEnabled: Bool
+    var loraRank: Int
+    var validationSplit: Double
+    var sampleLimit: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case datasetId = "dataset_id"
+        case baseModel = "base_model"
+        case epochs
+        case batchSize = "batch_size"
+        case learningRate = "learning_rate"
+        case loraEnabled = "lora_enabled"
+        case loraRank = "lora_rank"
+        case validationSplit = "validation_split"
+        case sampleLimit = "sample_limit"
+    }
+
+    static var `default`: TrainingConfig {
+        TrainingConfig(
+            datasetId: "openecad",
+            baseModel: "openecad-0.89b",
+            epochs: 3,
+            batchSize: 4,
+            learningRate: 2e-5,
+            loraEnabled: true,
+            loraRank: 16,
+            validationSplit: 0.1,
+            sampleLimit: nil
+        )
+    }
+}
+
+struct TrainingMetrics: Codable {
+    let epoch: Int
+    let step: Int
+    let totalSteps: Int
+    let loss: Double
+    let learningRate: Double
+    let validationLoss: Double?
+    let accuracy: Double?
+    let elapsedTime: Double
+    let estimatedRemaining: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case epoch, step, loss, accuracy
+        case totalSteps = "total_steps"
+        case learningRate = "learning_rate"
+        case validationLoss = "validation_loss"
+        case elapsedTime = "elapsed_time"
+        case estimatedRemaining = "estimated_remaining"
+    }
+}
+
+struct TrainingJob: Codable, Identifiable {
+    let id: String
+    let datasetId: String
+    let baseModel: String
+    let status: String
+    let progress: Double
+    let currentEpoch: Int
+    let totalEpochs: Int
+    let metrics: TrainingMetrics?
+    let createdAt: String
+    let startedAt: String?
+    let completedAt: String?
+    let error: String?
+    let outputModelPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, status, progress, metrics, error
+        case datasetId = "dataset_id"
+        case baseModel = "base_model"
+        case currentEpoch = "current_epoch"
+        case totalEpochs = "total_epochs"
+        case createdAt = "created_at"
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+        case outputModelPath = "output_model_path"
+    }
+}
+
+struct StartTrainingResponse: Codable {
+    let success: Bool
+    let jobId: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case jobId = "job_id"
+        case message
+    }
+}
+
+struct TrainingJobsResponse: Codable {
+    let jobs: [TrainingJob]
+    let activeCount: Int
+    let completedCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case jobs
+        case activeCount = "active_count"
+        case completedCount = "completed_count"
+    }
+}
+
+struct TrainedModel: Codable, Identifiable {
+    let id: String
+    let name: String
+    let baseModel: String
+    let datasetId: String
+    let createdAt: String
+    let size: String
+    let metrics: TrainingMetrics?
+    let path: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, size, metrics, path
+        case baseModel = "base_model"
+        case datasetId = "dataset_id"
+        case createdAt = "created_at"
+    }
+}
+
+struct TrainedModelsResponse: Codable {
+    let models: [TrainedModel]
+    let totalCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case models
+        case totalCount = "total_count"
+    }
+}
