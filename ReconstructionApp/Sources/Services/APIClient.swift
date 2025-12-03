@@ -829,7 +829,8 @@ actor APIClient {
 
     // MARK: - Training Management
 
-    func listDatasets() async throws -> DatasetsListResponse {
+    /// List available remote datasets (HuggingFace, etc.)
+    func listRemoteDatasets() async throws -> RemoteDatasetsResponse {
         let base = await baseURL
         guard let url = URL(string: "\(base)/training/datasets") else {
             throw APIError.invalidURL
@@ -841,15 +842,16 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func downloadDataset(datasetId: String, sampleLimit: Int? = nil) async throws -> DatasetDownloadResponse {
+    /// Download a remote dataset to the server
+    func downloadDataset(datasetId: String, subset: Int? = nil) async throws -> DatasetDownloadResponse {
         let base = await baseURL
         guard var urlComponents = URLComponents(string: "\(base)/training/datasets/\(datasetId)/download") else {
             throw APIError.invalidURL
         }
 
-        if let limit = sampleLimit {
+        if let subset = subset {
             urlComponents.queryItems = [
-                URLQueryItem(name: "sample_limit", value: String(limit))
+                URLQueryItem(name: "subset", value: String(subset))
             ]
         }
 
@@ -864,9 +866,10 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func getDatasetStatus(datasetId: String) async throws -> TrainingDataset {
+    /// List local datasets created/downloaded on the server
+    func listLocalDatasets() async throws -> LocalDatasetsResponse {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/datasets/\(datasetId)") else {
+        guard let url = URL(string: "\(base)/training/finetune/datasets") else {
             throw APIError.invalidURL
         }
 
@@ -876,24 +879,68 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func startTraining(config: TrainingConfig) async throws -> StartTrainingResponse {
+    /// Create a new dataset from CAD models
+    func createDataset(request createRequest: DatasetCreateRequest) async throws -> DatasetCreateResponse {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/start") else {
+        guard let url = URL(string: "\(base)/training/finetune/datasets/create") else {
             throw APIError.invalidURL
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 3600 // Long timeout for dataset creation
 
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(createRequest)
+
+        return try await performRequest(request)
+    }
+
+    /// Delete a local dataset
+    func deleteDataset(name: String) async throws -> GenericResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/finetune/datasets/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        return try await performRequest(request)
+    }
+
+    /// Check fine-tuning dependencies and readiness
+    func getFinetuneStatus() async throws -> FinetuneStatusResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/finetune/status") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Start a fine-tuning job
+    func startFinetune(config: FinetuneConfig) async throws -> FinetuneStartResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/finetune/start") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60 // Training runs asynchronously
+
         request.httpBody = try encoder.encode(config)
 
         return try await performRequest(request)
     }
 
-    func listTrainingJobs() async throws -> TrainingJobsResponse {
+    /// List all training jobs
+    func listTrainingJobs() async throws -> TrainingJobsListResponse {
         let base = await baseURL
         guard let url = URL(string: "\(base)/training/jobs") else {
             throw APIError.invalidURL
@@ -905,9 +952,10 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func getTrainingJob(jobId: String) async throws -> TrainingJob {
+    /// Get a specific training job's status and metrics
+    func getTrainingJob(jobId: String) async throws -> TrainingJobStatus {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/jobs/\(jobId)") else {
+        guard let url = URL(string: "\(base)/jobs/\(jobId)") else {
             throw APIError.invalidURL
         }
 
@@ -917,7 +965,8 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func stopTraining(jobId: String) async throws -> StartTrainingResponse {
+    /// Stop a running training job
+    func stopTraining(jobId: String) async throws -> GenericResponse {
         let base = await baseURL
         guard let url = URL(string: "\(base)/training/jobs/\(jobId)/stop") else {
             throw APIError.invalidURL
@@ -929,7 +978,126 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func listTrainedModels() async throws -> TrainedModelsResponse {
+    /// List trained model checkpoints
+    func listCheckpoints() async throws -> CheckpointsResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/finetune/checkpoints") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Delete a trained model checkpoint
+    func deleteCheckpoint(name: String) async throws -> GenericResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/models/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        return try await performRequest(request)
+    }
+
+    // MARK: - Training Pipeline (New)
+
+    /// List all datasets available on the server (prepared/ready for training)
+    func listServerDatasets() async throws -> ServerDatasetsResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Get status of a specific dataset
+    func getDatasetStatus(name: String) async throws -> ServerDataset {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)/status") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Extract a subset from a source dataset
+    func extractDataset(request extractRequest: DatasetExtractRequest) async throws -> DatasetExtractResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/extract") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 300
+
+        request.httpBody = try encoder.encode(extractRequest)
+
+        return try await performRequest(request)
+    }
+
+    /// Render views for a dataset
+    func renderDataset(name: String, renderRequest: DatasetRenderRequest) async throws -> DatasetRenderResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)/render") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 3600 // Long timeout for batch rendering
+
+        request.httpBody = try encoder.encode(renderRequest)
+
+        return try await performRequest(request)
+    }
+
+    /// Convert dataset to training format
+    func convertDataset(name: String, convertRequest: DatasetConvertRequest) async throws -> DatasetConvertResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)/convert") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 600
+
+        request.httpBody = try encoder.encode(convertRequest)
+
+        return try await performRequest(request)
+    }
+
+    /// Validate a dataset before training
+    func validateDataset(name: String) async throws -> DatasetValidationResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/datasets/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)/validate") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        return try await performRequest(request)
+    }
+
+    /// List available training models
+    func listTrainingModels() async throws -> TrainingModelsResponse {
         let base = await baseURL
         guard let url = URL(string: "\(base)/training/models") else {
             throw APIError.invalidURL
@@ -941,16 +1109,94 @@ actor APIClient {
         return try await performRequest(request)
     }
 
-    func deleteTrainedModel(modelId: String) async throws -> StartTrainingResponse {
+    /// Start a test run for quick convergence check
+    func startTestRun(request testRequest: TestRunRequest) async throws -> TestRunResponse {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/models/\(modelId)") else {
+        guard let url = URL(string: "\(base)/training/test-run") else {
             throw APIError.invalidURL
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        request.httpBody = try encoder.encode(testRequest)
 
         return try await performRequest(request)
+    }
+
+    /// Get test run results
+    func getTestRunResults(jobId: String) async throws -> TestRunResults {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/test-run/\(jobId)/results") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Start full VLM training
+    func startTrainingPipeline(request trainingRequest: TrainingStartRequest) async throws -> TrainingStartResponse {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/start") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        request.httpBody = try encoder.encode(trainingRequest)
+
+        return try await performRequest(request)
+    }
+
+    /// Get training progress
+    func getTrainingProgress(jobId: String) async throws -> TrainingProgress {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/\(jobId)/status") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    /// Get job progress (generic for any job type)
+    func getJobProgress(jobId: String) async throws -> JobProgress {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/jobs/\(jobId)/progress") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        return try await performRequest(request)
+    }
+
+    // Legacy aliases for backwards compatibility
+    func listDatasets() async throws -> RemoteDatasetsResponse {
+        try await listRemoteDatasets()
+    }
+
+    func startTraining(config: FinetuneConfig) async throws -> FinetuneStartResponse {
+        try await startFinetune(config: config)
+    }
+
+    func listTrainedModels() async throws -> CheckpointsResponse {
+        try await listCheckpoints()
+    }
+
+    func deleteTrainedModel(modelId: String) async throws -> GenericResponse {
+        try await deleteCheckpoint(name: modelId)
     }
 
     // MARK: - Private Helpers

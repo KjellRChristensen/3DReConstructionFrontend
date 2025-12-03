@@ -563,191 +563,649 @@ struct VLMCodeResponse: Codable {
     }
 }
 
-// MARK: - Training Management Models
+// MARK: - Training Pipeline Models
 
-struct TrainingDataset: Codable, Identifiable {
-    let id: String
+/// Dataset available on the server (already prepared/extracted)
+struct ServerDataset: Codable, Identifiable {
     let name: String
-    let description: String
-    let source: String
-    let size: String
-    let sampleCount: Int
+    let path: String
+    let status: DatasetStatus
+    let samples: Int
     let format: String
-    let license: String
-    let recommended: Bool
-    let downloaded: Bool
-    let downloadProgress: Double?
-    let localPath: String?
+    let compatibleModels: [String]
+    let created: String?
+    let size: String?
+    let renderProgress: Double?
+    let conversionProgress: Double?
+
+    var id: String { name }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, source, size, format, license, recommended, downloaded
-        case sampleCount = "sample_count"
-        case downloadProgress = "download_progress"
-        case localPath = "local_path"
+        case name, path, status, samples, format, created, size
+        case compatibleModels = "compatible_models"
+        case renderProgress = "render_progress"
+        case conversionProgress = "conversion_progress"
     }
 }
 
-struct DatasetsListResponse: Codable {
-    let datasets: [TrainingDataset]
-    let downloadedCount: Int
-    let totalSize: String
+enum DatasetStatus: String, Codable {
+    case extracting
+    case extracted
+    case rendering
+    case rendered
+    case converting
+    case converted
+    case validating
+    case ready
+    case error
 
-    enum CodingKeys: String, CodingKey {
-        case datasets
-        case downloadedCount = "downloaded_count"
-        case totalSize = "total_size"
+    var displayName: String {
+        switch self {
+        case .extracting: return "Extracting..."
+        case .extracted: return "Extracted"
+        case .rendering: return "Rendering views..."
+        case .rendered: return "Rendered"
+        case .converting: return "Converting..."
+        case .converted: return "Converted"
+        case .validating: return "Validating..."
+        case .ready: return "Ready for Training"
+        case .error: return "Error"
+        }
+    }
+
+    var isReady: Bool { self == .ready }
+    var isProcessing: Bool {
+        switch self {
+        case .extracting, .rendering, .converting, .validating:
+            return true
+        default:
+            return false
+        }
     }
 }
 
-struct DatasetDownloadResponse: Codable {
-    let success: Bool
-    let datasetId: String
+struct ServerDatasetsResponse: Codable {
+    let datasets: [ServerDataset]
+    let total: Int
+}
+
+/// Request to extract a subset from a source dataset
+struct DatasetExtractRequest: Codable {
+    var sourceName: String
+    var trainSize: Int
+    var valSize: Int?
+    var outputName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case sourceName = "source_name"
+        case trainSize = "train_size"
+        case valSize = "val_size"
+        case outputName = "output_name"
+    }
+}
+
+struct DatasetExtractResponse: Codable {
     let jobId: String
+    let datasetName: String
+    let status: String
     let message: String
 
     enum CodingKeys: String, CodingKey {
-        case success
-        case datasetId = "dataset_id"
         case jobId = "job_id"
+        case datasetName = "dataset_name"
+        case status, message
+    }
+}
+
+/// Request to render views for a dataset
+struct DatasetRenderRequest: Codable {
+    var resolution: Int
+    var views: [String]
+
+    init(resolution: Int = 512, views: [String] = ["front", "top", "right"]) {
+        self.resolution = resolution
+        self.views = views
+    }
+}
+
+struct DatasetRenderResponse: Codable {
+    let jobId: String
+    let status: String
+    let totalModels: Int
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case totalModels = "total_models"
         case message
     }
 }
 
-struct TrainingConfig: Codable {
-    var datasetId: String
+/// Request to convert dataset to training format
+struct DatasetConvertRequest: Codable {
+    var format: String
+
+    init(format: String = "tinyllava") {
+        self.format = format
+    }
+}
+
+struct DatasetConvertResponse: Codable {
+    let jobId: String
+    let status: String
+    let outputFormat: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case outputFormat = "output_format"
+        case message
+    }
+}
+
+/// Dataset validation response
+struct DatasetValidationResponse: Codable {
+    let valid: Bool
+    let samples: Int
+    let issues: [String]?
+    let warnings: [String]?
+}
+
+/// Available model for training
+struct TrainingModel: Codable, Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let parameters: String
+    let vram: String
+    let inputFormat: String
+    let recommended: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, parameters, vram, recommended
+        case inputFormat = "input_format"
+    }
+}
+
+struct TrainingModelsResponse: Codable {
+    let models: [TrainingModel]
+}
+
+/// Test run request for quick convergence check
+struct TestRunRequest: Codable {
+    var datasetName: String
+    var modelId: String
+    var epochs: Int
+    var batchSize: Int
+
+    enum CodingKeys: String, CodingKey {
+        case datasetName = "dataset_name"
+        case modelId = "model_id"
+        case epochs
+        case batchSize = "batch_size"
+    }
+}
+
+struct TestRunResponse: Codable {
+    let jobId: String
+    let status: String
+    let estimatedTime: String?
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case estimatedTime = "estimated_time"
+        case message
+    }
+}
+
+/// Test run results
+struct TestRunResults: Codable {
+    let success: Bool
+    let initialLoss: Double
+    let finalLoss: Double
+    let lossReduction: Double
+    let convergenceRate: Double?
+    let recommendation: String?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case initialLoss = "initial_loss"
+        case finalLoss = "final_loss"
+        case lossReduction = "loss_reduction"
+        case convergenceRate = "convergence_rate"
+        case recommendation
+    }
+}
+
+/// Full training request
+struct TrainingStartRequest: Codable {
+    var datasetName: String
+    var modelId: String
+    var epochs: Int
+    var batchSize: Int
+    var learningRate: Double
+    var loraRank: Int?
+    var runName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case datasetName = "dataset_name"
+        case modelId = "model_id"
+        case epochs
+        case batchSize = "batch_size"
+        case learningRate = "learning_rate"
+        case loraRank = "lora_rank"
+        case runName = "run_name"
+    }
+}
+
+struct TrainingStartResponse: Codable {
+    let jobId: String
+    let status: String
+    let runName: String
+    let estimatedTime: String?
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case runName = "run_name"
+        case estimatedTime = "estimated_time"
+        case message
+    }
+}
+
+/// Training status/progress
+struct TrainingProgress: Codable {
+    let jobId: String
+    let status: String
+    let progress: Double
+    let currentEpoch: Int
+    let totalEpochs: Int
+    let currentStep: Int
+    let totalSteps: Int
+    let loss: Double
+    let validationLoss: Double?
+    let accuracy: Double?
+    let learningRate: Double
+    let etaSeconds: Int?
+    let gpuMemory: String?
+    let throughput: String?
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status, progress, loss, accuracy
+        case currentEpoch = "current_epoch"
+        case totalEpochs = "total_epochs"
+        case currentStep = "current_step"
+        case totalSteps = "total_steps"
+        case validationLoss = "validation_loss"
+        case learningRate = "learning_rate"
+        case etaSeconds = "eta_seconds"
+        case gpuMemory = "gpu_memory"
+        case throughput
+    }
+}
+
+// MARK: - Training Management Models (Legacy)
+
+// Remote datasets available for download (HuggingFace, etc.)
+struct RemoteDataset: Codable, Identifiable {
+    let id: String
+    let name: String
+    let description: String
+    let downloadUrl: String
+    let size: String
+    let samples: Int
+    let status: String  // "available", "downloading", "downloaded"
+    let format: String?
+    let license: String?
+    let recommended: Bool?
+    let downloadProgress: Double?
+
+    var sampleCount: Int { samples }
+    var source: String { downloadUrl }
+    var downloaded: Bool { status == "downloaded" }
+    var localPath: String? { nil }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, description, size, samples, status, format, license, recommended
+        case downloadUrl = "download_url"
+        case downloadProgress = "download_progress"
+    }
+
+    init(id: String, name: String, description: String, downloadUrl: String = "", size: String, samples: Int, status: String = "available", format: String? = nil, license: String? = nil, recommended: Bool? = nil, downloadProgress: Double? = nil) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.downloadUrl = downloadUrl
+        self.size = size
+        self.samples = samples
+        self.status = status
+        self.format = format
+        self.license = license
+        self.recommended = recommended
+        self.downloadProgress = downloadProgress
+    }
+
+    // Legacy initializer for backwards compatibility with mock data
+    init(id: String, name: String, description: String, source: String, size: String, sampleCount: Int, format: String, license: String, recommended: Bool, downloaded: Bool, downloadProgress: Double?, localPath: String?) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.downloadUrl = source
+        self.size = size
+        self.samples = sampleCount
+        self.status = downloaded ? "downloaded" : "available"
+        self.format = format
+        self.license = license
+        self.recommended = recommended
+        self.downloadProgress = downloadProgress
+    }
+}
+
+struct RemoteDatasetsResponse: Codable {
+    let datasets: [RemoteDataset]
+}
+
+// Local datasets created/downloaded on the server
+struct LocalDataset: Codable, Identifiable {
+    let name: String
+    let path: String
+    let created: String
+    let stats: DatasetStats?
+
+    var id: String { name }
+}
+
+struct DatasetStats: Codable {
+    let totalModels: Int
+    let successful: Int
+    let errors: Int
+    let trainSamples: Int
+    let valSamples: Int
+
+    enum CodingKeys: String, CodingKey {
+        case totalModels = "total_models"
+        case successful, errors
+        case trainSamples = "train_samples"
+        case valSamples = "val_samples"
+    }
+}
+
+struct LocalDatasetsResponse: Codable {
+    let datasets: [LocalDataset]
+    let total: Int
+}
+
+struct DatasetDownloadResponse: Codable {
+    let jobId: String
+    let status: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status, message
+    }
+}
+
+struct DatasetCreateRequest: Codable {
+    var name: String
+    var sourceFolder: String
+    var annotationsFile: String?
+    var resolution: Int
+    var views: String
+    var trainSplit: Double
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case sourceFolder = "source_folder"
+        case annotationsFile = "annotations_file"
+        case resolution, views
+        case trainSplit = "train_split"
+    }
+}
+
+struct DatasetCreateResponse: Codable {
+    let jobId: String
+    let status: String
+    let datasetName: String
+    let modelCount: Int
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case datasetName = "dataset_name"
+        case modelCount = "model_count"
+        case message
+    }
+}
+
+struct FinetuneConfig: Codable {
+    var datasetName: String
     var baseModel: String
     var epochs: Int
     var batchSize: Int
     var learningRate: Double
-    var loraEnabled: Bool
     var loraRank: Int
-    var validationSplit: Double
-    var sampleLimit: Int?
+    var runName: String?
 
     enum CodingKeys: String, CodingKey {
-        case datasetId = "dataset_id"
+        case datasetName = "dataset_name"
         case baseModel = "base_model"
         case epochs
         case batchSize = "batch_size"
         case learningRate = "learning_rate"
-        case loraEnabled = "lora_enabled"
         case loraRank = "lora_rank"
-        case validationSplit = "validation_split"
-        case sampleLimit = "sample_limit"
+        case runName = "run_name"
     }
 
-    static var `default`: TrainingConfig {
-        TrainingConfig(
-            datasetId: "openecad",
-            baseModel: "openecad-0.89b",
+    static var `default`: FinetuneConfig {
+        FinetuneConfig(
+            datasetName: "",
+            baseModel: "Yuan-Che/OpenECADv2-SigLIP-0.89B",
             epochs: 3,
-            batchSize: 4,
-            learningRate: 2e-5,
-            loraEnabled: true,
-            loraRank: 16,
-            validationSplit: 0.1,
-            sampleLimit: nil
+            batchSize: 2,
+            learningRate: 0.0001,
+            loraRank: 128,
+            runName: nil
         )
+    }
+}
+
+/// UI model for configuring training runs (wraps FinetuneConfig for the UI)
+struct TrainingConfig {
+    var datasetId: String = ""
+    var baseModel: String = "openecad-0.89b"
+    var epochs: Int = 3
+    var batchSize: Int = 2
+    var learningRate: Double = 0.0001
+    var loraEnabled: Bool = true
+    var loraRank: Int = 64
+    var validationSplit: Double = 0.1
+    var sampleLimit: Int?
+
+    static var `default`: TrainingConfig {
+        TrainingConfig()
+    }
+
+    /// Convert UI model to API model
+    func toFinetuneConfig() -> FinetuneConfig {
+        // Map UI model IDs to full HuggingFace repo paths
+        let modelMap: [String: String] = [
+            "openecad-0.55b": "Yuan-Che/OpenECADv2-CLIP-0.55B",
+            "openecad-0.89b": "Yuan-Che/OpenECADv2-SigLIP-0.89B",
+            "openecad-2.4b": "Yuan-Che/OpenECADv2-SigLIP-2.4B",
+            "openecad-3.1b": "Yuan-Che/OpenECAD-SigLIP-3.1B",
+            "internvl2-2b": "OpenGVLab/InternVL2-2B",
+            "internvl2-8b": "OpenGVLab/InternVL2-8B"
+        ]
+
+        return FinetuneConfig(
+            datasetName: datasetId,
+            baseModel: modelMap[baseModel] ?? baseModel,
+            epochs: epochs,
+            batchSize: batchSize,
+            learningRate: learningRate,
+            loraRank: loraEnabled ? loraRank : 0,
+            runName: nil
+        )
+    }
+}
+
+struct FinetuneStartResponse: Codable {
+    let jobId: String
+    let status: String
+    let runName: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status
+        case runName = "run_name"
+        case message
     }
 }
 
 struct TrainingMetrics: Codable {
     let epoch: Int
     let step: Int
-    let totalSteps: Int
     let loss: Double
-    let learningRate: Double
-    let validationLoss: Double?
     let accuracy: Double?
-    let elapsedTime: Double
-    let estimatedRemaining: Double?
+    let etaSeconds: Double?
+    let totalSteps: Int?
+    let learningRate: Double?
+    let validationLoss: Double?
+
+    // Computed properties for UI backward compatibility
+    var estimatedRemaining: Double? { etaSeconds }
 
     enum CodingKeys: String, CodingKey {
         case epoch, step, loss, accuracy
+        case etaSeconds = "eta_seconds"
         case totalSteps = "total_steps"
         case learningRate = "learning_rate"
         case validationLoss = "validation_loss"
-        case elapsedTime = "elapsed_time"
-        case estimatedRemaining = "estimated_remaining"
     }
 }
 
-struct TrainingJob: Codable, Identifiable {
-    let id: String
-    let datasetId: String
-    let baseModel: String
+struct TrainingJobStatus: Codable, Identifiable {
+    let jobId: String
     let status: String
     let progress: Double
-    let currentEpoch: Int
-    let totalEpochs: Int
+    let currentStage: String?
+    let jobType: String?
+    let runName: String?
+    let datasetName: String?
     let metrics: TrainingMetrics?
-    let createdAt: String
+    let config: TrainingJobConfig?
     let startedAt: String?
     let completedAt: String?
     let error: String?
-    let outputModelPath: String?
+
+    var id: String { jobId }
+
+    // Backward compatibility computed properties for UI
+    var datasetId: String { datasetName ?? config?.datasetId ?? "Unknown" }
+    var baseModel: String { config?.modelId ?? "Unknown" }
+    var currentEpoch: Int { metrics?.epoch ?? 0 }
+    var totalEpochs: Int { config?.epochs ?? 1 }
 
     enum CodingKeys: String, CodingKey {
-        case id, status, progress, metrics, error
-        case datasetId = "dataset_id"
-        case baseModel = "base_model"
-        case currentEpoch = "current_epoch"
-        case totalEpochs = "total_epochs"
-        case createdAt = "created_at"
+        case jobId = "job_id"
+        case status, progress, metrics, config, error
+        case currentStage = "current_stage"
+        case jobType = "job_type"
+        case runName = "run_name"
+        case datasetName = "dataset_name"
         case startedAt = "started_at"
         case completedAt = "completed_at"
-        case outputModelPath = "output_model_path"
     }
 }
 
-struct StartTrainingResponse: Codable {
-    let success: Bool
-    let jobId: String
-    let message: String
+struct TrainingJobConfig: Codable {
+    let modelId: String?
+    let datasetId: String?
+    let epochs: Int?
 
     enum CodingKeys: String, CodingKey {
-        case success
-        case jobId = "job_id"
-        case message
-    }
-}
-
-struct TrainingJobsResponse: Codable {
-    let jobs: [TrainingJob]
-    let activeCount: Int
-    let completedCount: Int
-
-    enum CodingKeys: String, CodingKey {
-        case jobs
-        case activeCount = "active_count"
-        case completedCount = "completed_count"
-    }
-}
-
-struct TrainedModel: Codable, Identifiable {
-    let id: String
-    let name: String
-    let baseModel: String
-    let datasetId: String
-    let createdAt: String
-    let size: String
-    let metrics: TrainingMetrics?
-    let path: String
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, size, metrics, path
-        case baseModel = "base_model"
+        case modelId = "model_id"
         case datasetId = "dataset_id"
-        case createdAt = "created_at"
+        case epochs
     }
 }
 
-struct TrainedModelsResponse: Codable {
-    let models: [TrainedModel]
-    let totalCount: Int
+struct TrainingJobsListResponse: Codable {
+    let jobs: [TrainingJobStatus]
+}
+
+struct CheckpointInfo: Codable, Identifiable {
+    let name: String
+    let path: String
+    let created: String
+    let hasLoraAdapter: Bool
+    let config: CheckpointConfig?
+    let size: String?
+    let metrics: CheckpointMetrics?
+
+    var id: String { name }
+
+    // Backward compatibility computed properties for UI
+    var baseModel: String { config?.baseModel ?? "Unknown" }
+    var datasetId: String { "local" }
+    var createdAt: String { created }
 
     enum CodingKeys: String, CodingKey {
-        case models
-        case totalCount = "total_count"
+        case name, path, created, config, size, metrics
+        case hasLoraAdapter = "has_lora_adapter"
     }
 }
+
+struct CheckpointConfig: Codable {
+    let baseModel: String
+    let loraRank: Int?
+    let epochs: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case baseModel = "base_model"
+        case loraRank = "lora_rank"
+        case epochs
+    }
+}
+
+struct CheckpointMetrics: Codable {
+    let loss: Double?
+    let accuracy: Double?
+    let epochs: Int?
+}
+
+struct CheckpointsResponse: Codable {
+    let checkpoints: [CheckpointInfo]
+    let total: Int
+}
+
+struct FinetuneStatusResponse: Codable {
+    let ready: Bool
+    let dependencies: [String: Bool]
+    let device: String
+    let recommendedSetup: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case ready, dependencies, device
+        case recommendedSetup = "recommended_setup"
+    }
+}
+
+struct GenericResponse: Codable {
+    let success: Bool
+    let message: String?
+}
+
+// Keep legacy types for backwards compatibility
+typealias TrainingDataset = RemoteDataset
+typealias TrainingJob = TrainingJobStatus
+typealias TrainedModel = CheckpointInfo

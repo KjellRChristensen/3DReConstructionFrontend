@@ -1,9 +1,8 @@
 import SwiftUI
 
 struct TrainingTab: View {
-    @StateObject private var viewModel = TrainingManagementViewModel()
+    @StateObject private var viewModel = TrainingPipelineViewModel()
     @State private var selectedSection: TrainingSection = .datasets
-    @State private var showingTrainingConfig = false
 
     var body: some View {
         NavigationStack {
@@ -23,9 +22,9 @@ struct TrainingTab: View {
                     case .datasets:
                         datasetsView
                     case .training:
-                        trainingJobsView
-                    case .models:
-                        trainedModelsView
+                        trainingView
+                    case .results:
+                        resultsView
                     }
                 }
             }
@@ -46,9 +45,6 @@ struct TrainingTab: View {
             .refreshable {
                 await viewModel.refresh()
             }
-            .sheet(isPresented: $showingTrainingConfig) {
-                TrainingConfigSheet(viewModel: viewModel)
-            }
             .alert("Error", isPresented: .constant(viewModel.error != nil)) {
                 Button("OK") { viewModel.error = nil }
             } message: {
@@ -61,155 +57,316 @@ struct TrainingTab: View {
 
     private var datasetsView: some View {
         Group {
-            if viewModel.isLoading && viewModel.datasets.isEmpty {
+            if viewModel.isLoading && viewModel.serverDatasets.isEmpty {
                 loadingView("Loading datasets...")
-            } else if viewModel.datasets.isEmpty {
-                emptyView("No Datasets", "Available training datasets will appear here.")
+            } else if viewModel.serverDatasets.isEmpty {
+                emptyDatasetView
             } else {
                 datasetsList
             }
         }
     }
 
+    private var emptyDatasetView: some View {
+        ContentUnavailableView {
+            Label("No Datasets Available", systemImage: "externaldrive.badge.xmark")
+        } description: {
+            Text("Could not load datasets from the server.\nCheck that the backend is running and try again.")
+        } actions: {
+            Button {
+                Task { await viewModel.refresh() }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
     private var datasetsList: some View {
         List {
-            // Recommended Section
-            let recommended = viewModel.datasets.filter { $0.recommended }
-            if !recommended.isEmpty {
+            // Ready for Training
+            let readyDatasets = viewModel.serverDatasets.filter { $0.status.isReady }
+            if !readyDatasets.isEmpty {
                 Section {
-                    ForEach(recommended) { dataset in
-                        DatasetRow(
+                    ForEach(readyDatasets) { dataset in
+                        ServerDatasetRow(
                             dataset: dataset,
-                            isDownloading: viewModel.downloadingDatasets.contains(dataset.id),
-                            onDownload: { limit in
-                                Task { await viewModel.downloadDataset(dataset.id, sampleLimit: limit) }
+                            isSelected: viewModel.selectedDataset?.id == dataset.id,
+                            onSelect: {
+                                viewModel.selectDataset(dataset)
                             }
                         )
                     }
                 } header: {
-                    Label("Recommended", systemImage: "star.fill")
+                    Label("Ready for Training", systemImage: "checkmark.circle.fill")
                 }
             }
 
-            // Other Datasets
-            let others = viewModel.datasets.filter { !$0.recommended }
-            if !others.isEmpty {
+            // Processing
+            let processingDatasets = viewModel.serverDatasets.filter { $0.status.isProcessing }
+            if !processingDatasets.isEmpty {
                 Section {
-                    ForEach(others) { dataset in
-                        DatasetRow(
+                    ForEach(processingDatasets) { dataset in
+                        ServerDatasetRow(
                             dataset: dataset,
-                            isDownloading: viewModel.downloadingDatasets.contains(dataset.id),
-                            onDownload: { limit in
-                                Task { await viewModel.downloadDataset(dataset.id, sampleLimit: limit) }
-                            }
+                            isSelected: false,
+                            onSelect: nil
                         )
                     }
                 } header: {
-                    Text("Alternative Datasets")
+                    Label("Processing", systemImage: "gearshape.2")
+                }
+            }
+
+            // Other statuses
+            let otherDatasets = viewModel.serverDatasets.filter { !$0.status.isReady && !$0.status.isProcessing }
+            if !otherDatasets.isEmpty {
+                Section {
+                    ForEach(otherDatasets) { dataset in
+                        ServerDatasetRow(
+                            dataset: dataset,
+                            isSelected: false,
+                            onSelect: nil
+                        )
+                    }
+                } header: {
+                    Text("Other")
                 }
             }
         }
         .listStyle(.insetGrouped)
     }
 
-    // MARK: - Training Jobs View
+    // MARK: - Training View
 
-    private var trainingJobsView: some View {
+    private var trainingView: some View {
         Group {
-            if viewModel.isLoading && viewModel.trainingJobs.isEmpty {
-                loadingView("Loading training jobs...")
+            if viewModel.selectedDataset == nil {
+                noDatasetSelectedView
             } else {
-                trainingJobsList
+                trainingConfigView
             }
         }
     }
 
-    private var trainingJobsList: some View {
+    private var noDatasetSelectedView: some View {
+        ContentUnavailableView {
+            Label("Select a Dataset", systemImage: "doc.badge.plus")
+        } description: {
+            Text("Go to the Datasets tab and select a dataset that is ready for training.")
+        } actions: {
+            Button("Go to Datasets") {
+                selectedSection = .datasets
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var trainingConfigView: some View {
         List {
-            // Start Training Button
+            // Selected Dataset
+            if let dataset = viewModel.selectedDataset {
+                Section {
+                    SelectedDatasetCard(dataset: dataset) {
+                        viewModel.selectedDataset = nil
+                    }
+                } header: {
+                    Text("Selected Dataset")
+                }
+            }
+
+            // Model Selection
             Section {
-                Button {
-                    showingTrainingConfig = true
-                } label: {
-                    Label("Start New Training", systemImage: "play.circle.fill")
-                        .font(.headline)
-                }
-                .disabled(viewModel.datasets.filter { $0.downloaded }.isEmpty)
-            }
-
-            // Active Jobs
-            let activeJobs = viewModel.trainingJobs.filter { $0.status == "running" || $0.status == "pending" }
-            if !activeJobs.isEmpty {
-                Section {
-                    ForEach(activeJobs) { job in
-                        TrainingJobRow(
-                            job: job,
-                            onStop: {
-                                Task { await viewModel.stopTraining(job.id) }
+                if viewModel.isLoading {
+                    HStack {
+                        ProgressView()
+                            .padding(.trailing, 8)
+                        Text("Loading models...")
+                            .foregroundStyle(.secondary)
+                    }
+                } else if viewModel.availableModels.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("No models available", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Text("Could not load models from the server.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            Task { await viewModel.loadAll() }
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .font(.caption)
+                    }
+                } else if viewModel.compatibleModels.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("No compatible models", systemImage: "cpu.fill")
+                            .foregroundStyle(.secondary)
+                        Text("No models support this dataset's format.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(viewModel.compatibleModels) { model in
+                        ModelSelectionRow(
+                            model: model,
+                            isSelected: viewModel.selectedModel?.id == model.id,
+                            onSelect: {
+                                viewModel.selectedModel = model
                             }
                         )
                     }
-                } header: {
-                    Label("Active", systemImage: "bolt.fill")
+                }
+            } header: {
+                Text("Select Model")
+            } footer: {
+                if !viewModel.compatibleModels.isEmpty {
+                    Text("Models compatible with the selected dataset's format.")
                 }
             }
 
-            // Completed Jobs
-            let completedJobs = viewModel.trainingJobs.filter { $0.status == "completed" }
-            if !completedJobs.isEmpty {
+            // Training Parameters
+            if viewModel.selectedModel != nil {
                 Section {
-                    ForEach(completedJobs) { job in
-                        TrainingJobRow(job: job, onStop: nil)
+                    Stepper("Epochs: \(viewModel.trainingConfig.epochs)", value: $viewModel.trainingConfig.epochs, in: 1...100)
+
+                    Picker("Batch Size", selection: $viewModel.trainingConfig.batchSize) {
+                        Text("1").tag(1)
+                        Text("2").tag(2)
+                        Text("4").tag(4)
+                        Text("8").tag(8)
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack {
+                        Text("Learning Rate")
+                        Spacer()
+                        Text(String(format: "%.0e", viewModel.trainingConfig.learningRate))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(value: Binding(
+                        get: { log10(viewModel.trainingConfig.learningRate) },
+                        set: { viewModel.trainingConfig.learningRate = pow(10, $0) }
+                    ), in: -6...(-3), step: 0.5)
+
+                    Toggle("Use LoRA", isOn: $viewModel.trainingConfig.useLoRA)
+
+                    if viewModel.trainingConfig.useLoRA {
+                        Picker("LoRA Rank", selection: $viewModel.trainingConfig.loraRank) {
+                            Text("8").tag(8)
+                            Text("16").tag(16)
+                            Text("32").tag(32)
+                            Text("64").tag(64)
+                            Text("128").tag(128)
+                        }
+                        .pickerStyle(.segmented)
                     }
                 } header: {
-                    Label("Completed", systemImage: "checkmark.circle.fill")
+                    Text("Training Parameters")
                 }
-            }
 
-            // Failed Jobs
-            let failedJobs = viewModel.trainingJobs.filter { $0.status == "failed" }
-            if !failedJobs.isEmpty {
+                // Actions
                 Section {
-                    ForEach(failedJobs) { job in
-                        TrainingJobRow(job: job, onStop: nil)
+                    // Test Run Button
+                    Button {
+                        Task { await viewModel.startTestRun() }
+                    } label: {
+                        HStack {
+                            if viewModel.isRunningTest {
+                                ProgressView()
+                                    .padding(.trailing, 8)
+                            }
+                            Label("Run Convergence Test", systemImage: "waveform.path.ecg")
+                            Spacer()
+                            Text("~5 min")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                } header: {
-                    Label("Failed", systemImage: "xmark.circle.fill")
+                    .disabled(viewModel.isRunningTest || viewModel.isTraining)
+
+                    // Start Training Button
+                    Button {
+                        Task { await viewModel.startTraining() }
+                    } label: {
+                        HStack {
+                            if viewModel.isTraining {
+                                ProgressView()
+                                    .padding(.trailing, 8)
+                            }
+                            Label("Start Training", systemImage: "play.circle.fill")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .disabled(viewModel.isRunningTest || viewModel.isTraining)
+                } footer: {
+                    Text("Run a quick test first to verify convergence before starting full training.")
                 }
             }
 
-            if viewModel.trainingJobs.isEmpty {
+            // Active Training Job
+            if let activeJob = viewModel.activeTrainingJob {
                 Section {
-                    Text("No training jobs yet. Start a new training to see progress here.")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
+                    ActiveTrainingJobView(
+                        progress: activeJob,
+                        onStop: {
+                            Task { await viewModel.stopTraining() }
+                        }
+                    )
+                } header: {
+                    Label("Training in Progress", systemImage: "bolt.fill")
+                }
+            }
+
+            // Test Results
+            if let testResults = viewModel.testRunResults {
+                Section {
+                    TestResultsView(results: testResults)
+                } header: {
+                    Text("Test Results")
                 }
             }
         }
         .listStyle(.insetGrouped)
     }
 
-    // MARK: - Trained Models View
+    // MARK: - Results View
 
-    private var trainedModelsView: some View {
+    private var resultsView: some View {
         Group {
-            if viewModel.isLoading && viewModel.trainedModels.isEmpty {
-                loadingView("Loading models...")
-            } else if viewModel.trainedModels.isEmpty {
-                emptyView("No Trained Models", "Completed training jobs will produce models here.")
+            if viewModel.isLoading && viewModel.checkpoints.isEmpty {
+                loadingView("Loading results...")
+            } else if viewModel.checkpoints.isEmpty {
+                emptyResultsView
             } else {
-                trainedModelsList
+                resultsList
             }
         }
     }
 
-    private var trainedModelsList: some View {
+    private var emptyResultsView: some View {
+        ContentUnavailableView {
+            Label("No Trained Models", systemImage: "cube.box")
+        } description: {
+            Text("No checkpoints available.\nCompleted training runs will appear here.")
+        } actions: {
+            Button {
+                Task { await viewModel.refresh() }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var resultsList: some View {
         List {
-            ForEach(viewModel.trainedModels) { model in
-                TrainedModelRow(
-                    model: model,
+            ForEach(viewModel.checkpoints) { checkpoint in
+                CheckpointRow(
+                    checkpoint: checkpoint,
                     onDelete: {
-                        Task { await viewModel.deleteModel(model.id) }
+                        Task { await viewModel.deleteCheckpoint(checkpoint.name) }
                     }
                 )
             }
@@ -227,14 +384,6 @@ struct TrainingTab: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    private func emptyView(_ title: String, _ description: String) -> some View {
-        ContentUnavailableView {
-            Label(title, systemImage: "tray")
-        } description: {
-            Text(description)
-        }
-    }
 }
 
 // MARK: - Section Enum
@@ -242,216 +391,92 @@ struct TrainingTab: View {
 enum TrainingSection: String, CaseIterable {
     case datasets
     case training
-    case models
+    case results
 
     var title: String {
         switch self {
         case .datasets: return "Datasets"
         case .training: return "Training"
-        case .models: return "Models"
+        case .results: return "Results"
         }
     }
 }
 
-// MARK: - Dataset Row
+// MARK: - Server Dataset Row
 
-struct DatasetRow: View {
-    let dataset: TrainingDataset
-    let isDownloading: Bool
-    let onDownload: (Int?) -> Void
-
-    @State private var showingDownloadOptions = false
-    @State private var sampleLimit: String = ""
+struct ServerDatasetRow: View {
+    let dataset: ServerDataset
+    let isSelected: Bool
+    let onSelect: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+        Button {
+            onSelect?()
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(dataset.name)
                             .font(.headline)
+                            .foregroundStyle(.primary)
 
-                        if dataset.recommended {
-                            Text("Recommended")
-                                .font(.caption2)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.green.opacity(0.2))
-                                .foregroundStyle(.green)
-                                .clipShape(Capsule())
-                        }
+                        Text("\(dataset.samples.formatted()) samples")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
-                    Text(dataset.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+                    Spacer()
 
-                Spacer()
-
-                if dataset.downloaded {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.title2)
-                } else if isDownloading {
-                    ProgressView()
-                }
-            }
-
-            // Info Grid
-            HStack(spacing: 16) {
-                InfoBadge(icon: "doc.fill", text: "\(dataset.sampleCount.formatted()) samples")
-                InfoBadge(icon: "externaldrive", text: dataset.size)
-                InfoBadge(icon: "doc.text", text: dataset.format)
-            }
-
-            // Source
-            if let url = URL(string: dataset.source) {
-                Link(destination: url) {
-                    Label(url.host ?? "Source", systemImage: "link")
-                        .font(.caption)
-                }
-            }
-
-            // Download Actions
-            if !dataset.downloaded && !isDownloading {
-                Divider()
-
-                VStack(spacing: 8) {
-                    Button {
-                        onDownload(nil)
-                    } label: {
-                        Label("Download Full Dataset", systemImage: "arrow.down.circle.fill")
-                            .frame(maxWidth: .infinity)
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.blue)
+                            .font(.title2)
+                    } else {
+                        StatusBadge(status: dataset.status)
                     }
-                    .buttonStyle(.borderedProminent)
+                }
 
-                    Button {
-                        showingDownloadOptions = true
-                    } label: {
-                        Label("Download Subset...", systemImage: "slider.horizontal.3")
-                            .frame(maxWidth: .infinity)
+                // Progress bars for processing states
+                if dataset.status.isProcessing {
+                    if let progress = dataset.renderProgress, dataset.status == .rendering {
+                        ProgressView(value: progress)
+                        Text("Rendering: \(Int(progress * 100))%")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.bordered)
-                }
-            }
-
-            // Download Progress
-            if isDownloading, let progress = dataset.downloadProgress {
-                VStack(spacing: 4) {
-                    ProgressView(value: progress)
-                    Text("\(Int(progress * 100))% downloaded")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.vertical, 8)
-        .alert("Download Subset", isPresented: $showingDownloadOptions) {
-            TextField("Sample limit (e.g., 10000)", text: $sampleLimit)
-                .keyboardType(.numberPad)
-            Button("Download") {
-                if let limit = Int(sampleLimit), limit > 0 {
-                    onDownload(limit)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Enter the number of samples to download for quick testing.")
-        }
-    }
-}
-
-struct InfoBadge: View {
-    let icon: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption2)
-            Text(text)
-                .font(.caption2)
-        }
-        .foregroundStyle(.secondary)
-    }
-}
-
-// MARK: - Training Job Row
-
-struct TrainingJobRow: View {
-    let job: TrainingJob
-    let onStop: (() -> Void)?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Training on \(job.datasetId)")
-                        .font(.headline)
-                    Text("Base: \(job.baseModel)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                StatusBadge(status: job.status)
-            }
-
-            // Progress
-            if job.status == "running" {
-                VStack(spacing: 4) {
-                    ProgressView(value: job.progress)
-
-                    HStack {
-                        Text("Epoch \(job.currentEpoch)/\(job.totalEpochs)")
-                        Spacer()
-                        Text("\(Int(job.progress * 100))%")
+                    if let progress = dataset.conversionProgress, dataset.status == .converting {
+                        ProgressView(value: progress)
+                        Text("Converting: \(Int(progress * 100))%")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
-            }
 
-            // Metrics
-            if let metrics = job.metrics {
-                MetricsGrid(metrics: metrics)
-            }
-
-            // Error
-            if let error = job.error {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(8)
-                    .background(.red.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-
-            // Actions
-            if job.status == "running", let onStop = onStop {
-                Button(role: .destructive) {
-                    onStop()
-                } label: {
-                    Label("Stop Training", systemImage: "stop.circle")
-                        .frame(maxWidth: .infinity)
+                // Info row
+                HStack(spacing: 12) {
+                    Label(dataset.format, systemImage: "doc.text")
+                    if let size = dataset.size {
+                        Label(size, systemImage: "externaldrive")
+                    }
+                    if !dataset.compatibleModels.isEmpty {
+                        Label("\(dataset.compatibleModels.count) models", systemImage: "cpu")
+                    }
                 }
-                .buttonStyle(.bordered)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
+        .disabled(onSelect == nil)
     }
 }
 
 struct StatusBadge: View {
-    let status: String
+    let status: DatasetStatus
 
     var body: some View {
-        Text(status.capitalized)
+        Text(status.displayName)
             .font(.caption)
             .fontWeight(.medium)
             .padding(.horizontal, 8)
@@ -463,40 +488,176 @@ struct StatusBadge: View {
 
     private var backgroundColor: Color {
         switch status {
-        case "running": return .blue
-        case "pending": return .orange
-        case "completed": return .green
-        case "failed": return .red
-        default: return .gray
+        case .ready: return .green
+        case .extracting, .rendering, .converting, .validating: return .blue
+        case .extracted, .rendered, .converted: return .orange
+        case .error: return .red
         }
     }
 }
 
-struct MetricsGrid: View {
-    let metrics: TrainingMetrics
+// MARK: - Selected Dataset Card
+
+struct SelectedDatasetCard: View {
+    let dataset: ServerDataset
+    let onDeselect: () -> Void
 
     var body: some View {
-        LazyVGrid(columns: [
-            GridItem(.flexible()),
-            GridItem(.flexible()),
-            GridItem(.flexible())
-        ], spacing: 8) {
-            MetricCell(label: "Loss", value: String(format: "%.4f", metrics.loss))
-            if let valLoss = metrics.validationLoss {
-                MetricCell(label: "Val Loss", value: String(format: "%.4f", valLoss))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(dataset.name)
+                        .font(.headline)
+                    Text("\(dataset.samples.formatted()) samples | \(dataset.format)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    onDeselect()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            if let accuracy = metrics.accuracy {
-                MetricCell(label: "Accuracy", value: String(format: "%.1f%%", accuracy * 100))
-            }
-            MetricCell(label: "Step", value: "\(metrics.step)/\(metrics.totalSteps)")
-            MetricCell(label: "LR", value: String(format: "%.2e", metrics.learningRate))
-            if let remaining = metrics.estimatedRemaining {
-                MetricCell(label: "ETA", value: formatTime(remaining))
+
+            if !dataset.compatibleModels.isEmpty {
+                Text("Compatible with: \(dataset.compatibleModels.joined(separator: ", "))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(8)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Model Selection Row
+
+struct ModelSelectionRow: View {
+    let model: TrainingModel
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button {
+            onSelect()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(model.name)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+
+                        if model.recommended == true {
+                            Text("Recommended")
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.green.opacity(0.2))
+                                .foregroundStyle(.green)
+                                .clipShape(Capsule())
+                        }
+                    }
+
+                    Text(model.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    HStack(spacing: 12) {
+                        Label(model.parameters, systemImage: "slider.horizontal.3")
+                        Label(model.vram, systemImage: "memorychip")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                        .font(.title2)
+                } else {
+                    Image(systemName: "circle")
+                        .foregroundStyle(.secondary)
+                        .font(.title2)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Active Training Job View
+
+struct ActiveTrainingJobView: View {
+    let progress: TrainingProgress
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Progress bar
+            VStack(spacing: 4) {
+                ProgressView(value: progress.progress)
+
+                HStack {
+                    Text("Epoch \(progress.currentEpoch)/\(progress.totalEpochs)")
+                    Spacer()
+                    Text("\(Int(progress.progress * 100))%")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            // Metrics grid
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 8) {
+                MetricCell(label: "Loss", value: String(format: "%.4f", progress.loss))
+                if let valLoss = progress.validationLoss {
+                    MetricCell(label: "Val Loss", value: String(format: "%.4f", valLoss))
+                }
+                if let accuracy = progress.accuracy {
+                    MetricCell(label: "Accuracy", value: String(format: "%.1f%%", accuracy * 100))
+                }
+                MetricCell(label: "Step", value: "\(progress.currentStep)/\(progress.totalSteps)")
+                MetricCell(label: "LR", value: String(format: "%.2e", progress.learningRate))
+                if let eta = progress.etaSeconds {
+                    MetricCell(label: "ETA", value: formatTime(Double(eta)))
+                }
+            }
+            .padding(8)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // GPU info
+            HStack {
+                if let gpu = progress.gpuMemory {
+                    Label(gpu, systemImage: "memorychip")
+                }
+                if let throughput = progress.throughput {
+                    Label(throughput, systemImage: "speedometer")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            // Stop button
+            Button(role: .destructive) {
+                onStop()
+            } label: {
+                Label("Stop Training", systemImage: "stop.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -509,6 +670,120 @@ struct MetricsGrid: View {
         }
     }
 }
+
+// MARK: - Test Results View
+
+struct TestResultsView: View {
+    let results: TestRunResults
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: results.success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundStyle(results.success ? .green : .red)
+                    .font(.title2)
+
+                Text(results.success ? "Convergence Test Passed" : "Test Failed")
+                    .font(.headline)
+            }
+
+            LazyVGrid(columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible())
+            ], spacing: 8) {
+                MetricCell(label: "Initial Loss", value: String(format: "%.4f", results.initialLoss))
+                MetricCell(label: "Final Loss", value: String(format: "%.4f", results.finalLoss))
+                MetricCell(label: "Reduction", value: String(format: "%.1f%%", results.lossReduction * 100))
+                if let rate = results.convergenceRate {
+                    MetricCell(label: "Conv. Rate", value: String(format: "%.2f", rate))
+                }
+            }
+            .padding(8)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            if let recommendation = results.recommendation {
+                Text(recommendation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.blue.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+}
+
+// MARK: - Checkpoint Row
+
+struct CheckpointRow: View {
+    let checkpoint: CheckpointInfo
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(checkpoint.name)
+                        .font(.headline)
+                    Text(checkpoint.baseModel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if let size = checkpoint.size {
+                    Text(size)
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.systemGray5))
+                        .clipShape(Capsule())
+                }
+
+                if checkpoint.hasLoraAdapter {
+                    Text("LoRA")
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.blue.opacity(0.2))
+                        .foregroundStyle(.blue)
+                        .clipShape(Capsule())
+                }
+            }
+
+            HStack {
+                Label(checkpoint.created, systemImage: "calendar")
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if let metrics = checkpoint.metrics {
+                HStack(spacing: 16) {
+                    if let loss = metrics.loss {
+                        Label(String(format: "Loss: %.4f", loss), systemImage: "chart.line.downtrend.xyaxis")
+                    }
+                    if let accuracy = metrics.accuracy {
+                        Label(String(format: "Acc: %.1f%%", accuracy * 100), systemImage: "checkmark.circle")
+                    }
+                }
+                .font(.caption)
+            }
+
+            Button(role: .destructive) {
+                onDelete()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .font(.caption)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Metric Cell
 
 struct MetricCell: View {
     let label: String
@@ -526,373 +801,287 @@ struct MetricCell: View {
     }
 }
 
-// MARK: - Trained Model Row
+// MARK: - Training Config
 
-struct TrainedModelRow: View {
-    let model: TrainedModel
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.name)
-                        .font(.headline)
-                    Text("Based on \(model.baseModel)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Text(model.size)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color(.systemGray5))
-                    .clipShape(Capsule())
-            }
-
-            HStack {
-                Label(model.datasetId, systemImage: "doc.fill")
-                Spacer()
-                Text(model.createdAt)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            if let metrics = model.metrics {
-                HStack(spacing: 16) {
-                    Label(String(format: "Loss: %.4f", metrics.loss), systemImage: "chart.line.downtrend.xyaxis")
-                    if let accuracy = metrics.accuracy {
-                        Label(String(format: "Acc: %.1f%%", accuracy * 100), systemImage: "checkmark.circle")
-                    }
-                }
-                .font(.caption)
-            }
-
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete Model", systemImage: "trash")
-            }
-            .font(.caption)
-        }
-        .padding(.vertical, 8)
-    }
+struct TrainingUIConfig {
+    var epochs: Int = 3
+    var batchSize: Int = 2
+    var learningRate: Double = 0.0001
+    var useLoRA: Bool = true
+    var loraRank: Int = 64
 }
 
-// MARK: - Training Config Sheet
+// MARK: - Timeout Error
 
-struct TrainingConfigSheet: View {
-    @ObservedObject var viewModel: TrainingManagementViewModel
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var config = TrainingConfig.default
-    @State private var useSampleLimit = false
-    @State private var sampleLimitText = "10000"
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Dataset", selection: $config.datasetId) {
-                        ForEach(viewModel.datasets.filter { $0.downloaded }) { dataset in
-                            Text(dataset.name).tag(dataset.id)
-                        }
-                    }
-
-                    Picker("Base Model", selection: $config.baseModel) {
-                        Text("OpenECAD 0.89B").tag("openecad-0.89b")
-                        Text("InternVL2 2B").tag("internvl2-2b")
-                    }
-                } header: {
-                    Text("Model & Data")
-                }
-
-                Section {
-                    Stepper("Epochs: \(config.epochs)", value: $config.epochs, in: 1...20)
-
-                    Picker("Batch Size", selection: $config.batchSize) {
-                        Text("2").tag(2)
-                        Text("4").tag(4)
-                        Text("8").tag(8)
-                        Text("16").tag(16)
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack {
-                        Text("Learning Rate")
-                        Spacer()
-                        Text(String(format: "%.0e", config.learningRate))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Slider(value: Binding(
-                        get: { log10(config.learningRate) },
-                        set: { config.learningRate = pow(10, $0) }
-                    ), in: -6...(-3), step: 0.5)
-                } header: {
-                    Text("Training Parameters")
-                }
-
-                Section {
-                    Toggle("Use LoRA", isOn: $config.loraEnabled)
-
-                    if config.loraEnabled {
-                        Picker("LoRA Rank", selection: $config.loraRank) {
-                            Text("8").tag(8)
-                            Text("16").tag(16)
-                            Text("32").tag(32)
-                            Text("64").tag(64)
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                } header: {
-                    Text("Fine-tuning Method")
-                } footer: {
-                    Text("LoRA uses less memory and trains faster while maintaining quality.")
-                }
-
-                Section {
-                    Toggle("Limit Samples", isOn: $useSampleLimit)
-
-                    if useSampleLimit {
-                        TextField("Sample Limit", text: $sampleLimitText)
-                            .keyboardType(.numberPad)
-                    }
-
-                    HStack {
-                        Text("Validation Split")
-                        Spacer()
-                        Text("\(Int(config.validationSplit * 100))%")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $config.validationSplit, in: 0.05...0.3, step: 0.05)
-                } header: {
-                    Text("Data Options")
-                }
-
-                Section {
-                    Button {
-                        Task {
-                            if useSampleLimit, let limit = Int(sampleLimitText) {
-                                config.sampleLimit = limit
-                            }
-                            await viewModel.startTraining(config)
-                            dismiss()
-                        }
-                    } label: {
-                        HStack {
-                            Spacer()
-                            if viewModel.isStartingTraining {
-                                ProgressView()
-                                    .padding(.trailing, 8)
-                            }
-                            Text("Start Training")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
-                    }
-                    .disabled(viewModel.isStartingTraining)
-                }
-            }
-            .navigationTitle("Training Configuration")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
-    }
+struct TimeoutError: Error {
+    var localizedDescription: String { "Request timed out" }
 }
 
 // MARK: - ViewModel
 
 @MainActor
-class TrainingManagementViewModel: ObservableObject {
-    @Published var datasets: [TrainingDataset] = []
-    @Published var trainingJobs: [TrainingJob] = []
-    @Published var trainedModels: [TrainedModel] = []
+class TrainingPipelineViewModel: ObservableObject {
+    // Data
+    @Published var serverDatasets: [ServerDataset] = []
+    @Published var availableModels: [TrainingModel] = []
+    @Published var checkpoints: [CheckpointInfo] = []
 
+    // Selection
+    @Published var selectedDataset: ServerDataset?
+    @Published var selectedModel: TrainingModel?
+
+    // Configuration
+    @Published var trainingConfig = TrainingUIConfig()
+
+    // State
     @Published var isLoading = false
-    @Published var isStartingTraining = false
-    @Published var downloadingDatasets: Set<String> = []
+    @Published var isRunningTest = false
+    @Published var isTraining = false
     @Published var error: String?
+
+    // Progress
+    @Published var activeTrainingJob: TrainingProgress?
+    @Published var testRunResults: TestRunResults?
 
     private let apiClient = APIClient.shared
     private var pollingTask: Task<Void, Never>?
+    private var activeJobId: String?
+
+    // Computed
+    var compatibleModels: [TrainingModel] {
+        guard let dataset = selectedDataset else { return [] }
+        return availableModels.filter { model in
+            dataset.compatibleModels.contains(model.id) ||
+            dataset.compatibleModels.contains(model.inputFormat)
+        }
+    }
 
     func loadAll() async {
         isLoading = true
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.loadDatasets() }
-            group.addTask { await self.loadTrainingJobs() }
-            group.addTask { await self.loadTrainedModels() }
+            group.addTask { await self.loadServerDatasets() }
+            group.addTask { await self.loadModels() }
+            group.addTask { await self.loadCheckpoints() }
         }
         isLoading = false
-
-        // Start polling for active jobs
-        startPollingIfNeeded()
     }
 
     func refresh() async {
         await loadAll()
     }
 
-    private func loadDatasets() async {
-        do {
-            let response = try await apiClient.listDatasets()
-            datasets = response.datasets
-        } catch {
-            // Use mock data if API not available
-            datasets = Self.mockDatasets
+    func selectDataset(_ dataset: ServerDataset) {
+        selectedDataset = dataset
+        selectedModel = nil
+        testRunResults = nil
+
+        // Auto-select recommended model if available
+        if let recommended = compatibleModels.first(where: { $0.recommended == true }) {
+            selectedModel = recommended
+        } else if let first = compatibleModels.first {
+            selectedModel = first
         }
     }
 
-    private func loadTrainingJobs() async {
+    private func loadServerDatasets() async {
         do {
-            let response = try await apiClient.listTrainingJobs()
-            trainingJobs = response.jobs
+            let response = try await withTimeout(seconds: 3) {
+                try await self.apiClient.listServerDatasets()
+            }
+            serverDatasets = response.datasets
         } catch {
-            // Silently fail
+            // No data available - keep empty
+            serverDatasets = []
         }
     }
 
-    private func loadTrainedModels() async {
+    private func loadModels() async {
         do {
-            let response = try await apiClient.listTrainedModels()
-            trainedModels = response.models
+            let response = try await withTimeout(seconds: 3) {
+                try await self.apiClient.listTrainingModels()
+            }
+            availableModels = response.models
         } catch {
-            // Silently fail
+            // No data available - keep empty
+            availableModels = []
         }
     }
 
-    func downloadDataset(_ datasetId: String, sampleLimit: Int? = nil) async {
-        downloadingDatasets.insert(datasetId)
+    private func loadCheckpoints() async {
+        do {
+            let response = try await withTimeout(seconds: 3) {
+                try await self.apiClient.listCheckpoints()
+            }
+            checkpoints = response.checkpoints
+        } catch {
+            // No data available - keep empty
+            checkpoints = []
+        }
+    }
+
+    /// Execute an async operation with a timeout
+    private func withTimeout<T>(seconds: Double, operation: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TimeoutError()
+            }
+
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+
+    func startTestRun() async {
+        guard let dataset = selectedDataset, let model = selectedModel else { return }
+
+        isRunningTest = true
+        testRunResults = nil
 
         do {
-            _ = try await apiClient.downloadDataset(datasetId: datasetId, sampleLimit: sampleLimit)
-            await loadDatasets()
+            let request = TestRunRequest(
+                datasetName: dataset.name,
+                modelId: model.id,
+                epochs: 5,
+                batchSize: trainingConfig.batchSize
+            )
+            let response = try await withTimeout(seconds: 10) {
+                try await self.apiClient.startTestRun(request: request)
+            }
+            activeJobId = response.jobId
+
+            // Poll for results
+            await pollForTestResults(jobId: response.jobId)
         } catch {
             self.error = error.localizedDescription
-        }
-
-        downloadingDatasets.remove(datasetId)
-    }
-
-    func startTraining(_ config: TrainingConfig) async {
-        isStartingTraining = true
-
-        do {
-            _ = try await apiClient.startTraining(config: config)
-            await loadTrainingJobs()
-            startPollingIfNeeded()
-        } catch {
-            self.error = error.localizedDescription
-        }
-
-        isStartingTraining = false
-    }
-
-    func stopTraining(_ jobId: String) async {
-        do {
-            _ = try await apiClient.stopTraining(jobId: jobId)
-            await loadTrainingJobs()
-        } catch {
-            self.error = error.localizedDescription
+            isRunningTest = false
         }
     }
 
-    func deleteModel(_ modelId: String) async {
-        do {
-            _ = try await apiClient.deleteTrainedModel(modelId: modelId)
-            await loadTrainedModels()
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
+    private func pollForTestResults(jobId: String) async {
+        var pollCount = 0
+        let maxPolls = 100 // Max 5 minutes (100 * 3 seconds)
 
-    private func startPollingIfNeeded() {
-        let hasActiveJobs = trainingJobs.contains { $0.status == "running" || $0.status == "pending" }
+        while isRunningTest && pollCount < maxPolls {
+            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            pollCount += 1
 
-        if hasActiveJobs && pollingTask == nil {
-            pollingTask = Task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
-                    await loadTrainingJobs()
-
-                    let stillActive = trainingJobs.contains { $0.status == "running" || $0.status == "pending" }
-                    if !stillActive {
-                        break
-                    }
+            do {
+                let results = try await withTimeout(seconds: 5) {
+                    try await self.apiClient.getTestRunResults(jobId: jobId)
                 }
-                pollingTask = nil
+                testRunResults = results
+                isRunningTest = false
+                return
+            } catch {
+                // Still running or timeout, continue polling
             }
         }
+
+        // Timeout after max polls
+        if isRunningTest {
+            isRunningTest = false
+            self.error = "Test run polling timed out"
+        }
     }
 
-    // MARK: - Mock Data
+    func startTraining() async {
+        guard let dataset = selectedDataset, let model = selectedModel else { return }
 
-    static let mockDatasets: [TrainingDataset] = [
-        TrainingDataset(
-            id: "openecad",
-            name: "OpenECAD Dataset",
-            description: "918,719 image-code pairs in TinyLLaVA conversation format. Ready for direct training.",
-            source: "https://huggingface.co/datasets/Yuan-Che/OpenECAD-Dataset",
-            size: "1.73 GB",
-            sampleCount: 918719,
-            format: "Parquet",
-            license: "MIT",
-            recommended: true,
-            downloaded: false,
-            downloadProgress: nil,
-            localPath: nil
-        ),
-        TrainingDataset(
-            id: "deepcad",
-            name: "DeepCAD",
-            description: "178,238 CAD models with JSON construction sequences from Onshape.",
-            source: "https://github.com/ChrisWu1997/DeepCAD",
-            size: "2.1 GB",
-            sampleCount: 178238,
-            format: "JSON",
-            license: "MIT",
-            recommended: false,
-            downloaded: false,
-            downloadProgress: nil,
-            localPath: nil
-        ),
-        TrainingDataset(
-            id: "text2cad",
-            name: "Text2CAD",
-            description: "Multi-level text-to-CAD with 4 difficulty levels from Abstract to Expert.",
-            source: "https://huggingface.co/datasets/SadilKhan/Text2CAD",
-            size: "1.3 GB",
-            sampleCount: 180000,
-            format: "CSV/JSON",
-            license: "CC BY-NC-SA 4.0",
-            recommended: false,
-            downloaded: false,
-            downloadProgress: nil,
-            localPath: nil
-        ),
-        TrainingDataset(
-            id: "fusion360",
-            name: "Fusion 360 Gallery",
-            description: "8,625 real-world human-designed sequences from Autodesk.",
-            source: "https://github.com/AutodeskAILab/Fusion360GalleryDataset",
-            size: "2.0 GB",
-            sampleCount: 8625,
-            format: "JSON + STEP",
-            license: "Apache 2.0",
-            recommended: false,
-            downloaded: false,
-            downloadProgress: nil,
-            localPath: nil
-        )
-    ]
+        isTraining = true
+
+        do {
+            let request = TrainingStartRequest(
+                datasetName: dataset.name,
+                modelId: model.id,
+                epochs: trainingConfig.epochs,
+                batchSize: trainingConfig.batchSize,
+                learningRate: trainingConfig.learningRate,
+                loraRank: trainingConfig.useLoRA ? trainingConfig.loraRank : nil,
+                runName: nil
+            )
+            let response = try await withTimeout(seconds: 10) {
+                try await self.apiClient.startTrainingPipeline(request: request)
+            }
+            activeJobId = response.jobId
+
+            // Start polling for progress
+            startProgressPolling(jobId: response.jobId)
+        } catch {
+            self.error = error.localizedDescription
+            isTraining = false
+        }
+    }
+
+    func stopTraining() async {
+        guard let jobId = activeJobId else { return }
+
+        do {
+            _ = try await withTimeout(seconds: 5) {
+                try await self.apiClient.stopTraining(jobId: jobId)
+            }
+            pollingTask?.cancel()
+            pollingTask = nil
+            isTraining = false
+            activeTrainingJob = nil
+            activeJobId = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func startProgressPolling(jobId: String) {
+        pollingTask?.cancel()
+        pollingTask = Task {
+            var consecutiveFailures = 0
+            let maxConsecutiveFailures = 10 // Stop after 10 consecutive failures
+
+            while !Task.isCancelled && isTraining {
+                do {
+                    let progress = try await withTimeout(seconds: 5) {
+                        try await self.apiClient.getTrainingProgress(jobId: jobId)
+                    }
+                    activeTrainingJob = progress
+                    consecutiveFailures = 0 // Reset on success
+
+                    if progress.status == "completed" || progress.status == "failed" {
+                        isTraining = false
+                        if progress.status == "completed" {
+                            await loadCheckpoints()
+                        }
+                        break
+                    }
+                } catch {
+                    consecutiveFailures += 1
+                    if consecutiveFailures >= maxConsecutiveFailures {
+                        self.error = "Lost connection to training server"
+                        isTraining = false
+                        break
+                    }
+                    // Continue polling on transient errors
+                }
+
+                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+            }
+            pollingTask = nil
+        }
+    }
+
+    func deleteCheckpoint(_ name: String) async {
+        do {
+            _ = try await withTimeout(seconds: 5) {
+                try await self.apiClient.deleteCheckpoint(name: name)
+            }
+            await loadCheckpoints()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 }
 
 #Preview {
