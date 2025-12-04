@@ -567,67 +567,40 @@ struct VLMCodeResponse: Codable {
 
 /// Dataset available on the server (already prepared/extracted)
 struct ServerDataset: Codable, Identifiable {
+    let id: Int
     let name: String
     let path: String
-    let status: DatasetStatus
-    let samples: Int
-    let format: String
-    let compatibleModels: [String]
-    let created: String?
+    let description: String?
+    let models: Int           // Number of CAD models
+    let trainSamples: Int
+    let valSamples: Int
+    let images: Int
+    let conversations: Int
+    let sizeBytes: Int?
     let size: String?
-    let renderProgress: Double?
-    let conversionProgress: Double?
+    let status: String        // "ready", "processing", etc.
+    let created: String?
+    let updated: String?
 
-    var id: String { name }
+    // Computed properties for UI
+    var totalSamples: Int { trainSamples + valSamples }
+    var isReady: Bool { status == "ready" }
 
     enum CodingKeys: String, CodingKey {
-        case name, path, status, samples, format, created, size
-        case compatibleModels = "compatible_models"
-        case renderProgress = "render_progress"
-        case conversionProgress = "conversion_progress"
+        case id, name, path, description, models, images, conversations, size, status, created, updated
+        case trainSamples = "train_samples"
+        case valSamples = "val_samples"
+        case sizeBytes = "size_bytes"
     }
 }
 
-enum DatasetStatus: String, Codable {
-    case extracting
-    case extracted
-    case rendering
-    case rendered
-    case converting
-    case converted
-    case validating
-    case ready
-    case error
-
-    var displayName: String {
-        switch self {
-        case .extracting: return "Extracting..."
-        case .extracted: return "Extracted"
-        case .rendering: return "Rendering views..."
-        case .rendered: return "Rendered"
-        case .converting: return "Converting..."
-        case .converted: return "Converted"
-        case .validating: return "Validating..."
-        case .ready: return "Ready for Training"
-        case .error: return "Error"
-        }
-    }
-
-    var isReady: Bool { self == .ready }
-    var isProcessing: Bool {
-        switch self {
-        case .extracting, .rendering, .converting, .validating:
-            return true
-        default:
-            return false
-        }
-    }
-}
 
 struct ServerDatasetsResponse: Codable {
     let datasets: [ServerDataset]
     let total: Int
 }
+
+// Remove old DatasetStatus enum - now using String status
 
 /// Request to extract a subset from a source dataset
 struct DatasetExtractRequest: Codable {
@@ -715,36 +688,62 @@ struct DatasetValidationResponse: Codable {
 
 /// Available model for training
 struct TrainingModel: Codable, Identifiable {
-    let id: String
+    let id: Int
     let name: String
+    let displayName: String
     let description: String
+    let architecture: String
+    let baseModel: String
+    let visionModel: String?
     let parameters: String
-    let vram: String
-    let inputFormat: String
-    let recommended: Bool?
+    let supportsLora: Bool
+    let supportsFullFinetune: Bool
+    let recommendedForCad: Bool
+    let minVramGb: Int
+    let minRamGb: Int
+    let available: Bool
+    let verified: Bool
+    let huggingfaceId: String?
+    let created: String?
+    let updated: String?
+
+    // Computed for UI
+    var vramDisplay: String { "\(minVramGb)GB" }
+    var isRecommended: Bool { recommendedForCad }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, parameters, vram, recommended
-        case inputFormat = "input_format"
+        case id, name, description, architecture, parameters, available, verified, created, updated
+        case displayName = "display_name"
+        case baseModel = "base_model"
+        case visionModel = "vision_model"
+        case supportsLora = "supports_lora"
+        case supportsFullFinetune = "supports_full_finetune"
+        case recommendedForCad = "recommended_for_cad"
+        case minVramGb = "min_vram_gb"
+        case minRamGb = "min_ram_gb"
+        case huggingfaceId = "huggingface_id"
     }
 }
 
 struct TrainingModelsResponse: Codable {
     let models: [TrainingModel]
+    let total: Int
 }
 
 /// Test run request for quick convergence check
 struct TestRunRequest: Codable {
-    var datasetName: String
-    var modelId: String
+    var datasetId: Int
+    var modelId: Int
     var epochs: Int
     var batchSize: Int
+    var device: String
 
     enum CodingKeys: String, CodingKey {
-        case datasetName = "dataset_name"
+        case datasetId = "dataset_id"
         case modelId = "model_id"
         case epochs
         case batchSize = "batch_size"
+        case device
     }
 }
 
@@ -783,29 +782,31 @@ struct TestRunResults: Codable {
 
 /// Full training request
 struct TrainingStartRequest: Codable {
-    var datasetName: String
-    var modelId: String
+    var datasetId: Int
+    var modelId: Int
     var epochs: Int
     var batchSize: Int
     var learningRate: Double
-    var loraRank: Int?
-    var runName: String?
+    var useLora: Bool
+    var device: String
 
     enum CodingKeys: String, CodingKey {
-        case datasetName = "dataset_name"
+        case datasetId = "dataset_id"
         case modelId = "model_id"
         case epochs
         case batchSize = "batch_size"
         case learningRate = "learning_rate"
-        case loraRank = "lora_rank"
-        case runName = "run_name"
+        case useLora = "use_lora"
+        case device
     }
 }
 
 struct TrainingStartResponse: Codable {
     let jobId: String
     let status: String
-    let runName: String
+    let runName: String?
+    let dataset: String?
+    let model: String?
     let estimatedTime: String?
     let message: String
 
@@ -813,40 +814,100 @@ struct TrainingStartResponse: Codable {
         case jobId = "job_id"
         case status
         case runName = "run_name"
+        case dataset
+        case model
         case estimatedTime = "estimated_time"
         case message
     }
 }
 
-/// Training status/progress
-struct TrainingProgress: Codable {
+/// Download progress for model downloads
+struct DownloadProgress: Codable {
     let jobId: String
-    let status: String
-    let progress: Double
-    let currentEpoch: Int
-    let totalEpochs: Int
-    let currentStep: Int
-    let totalSteps: Int
-    let loss: Double
-    let validationLoss: Double?
-    let accuracy: Double?
-    let learningRate: Double
+    let isDownloading: Bool
+    let message: String?
+    let modelId: String?
+    let totalSizeBytes: Int64?
+    let totalSizeGb: Double?
+    let downloadedBytes: Int64?
+    let downloadedGb: Double?
+    let progressPercentage: Double?
+    let downloadSpeedMbps: Double?
     let etaSeconds: Int?
-    let gpuMemory: String?
-    let throughput: String?
+    let etaHuman: String?
+    let filesTotal: Int?
+    let filesComplete: Int?
+    let startedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case jobId = "job_id"
-        case status, progress, loss, accuracy
-        case currentEpoch = "current_epoch"
-        case totalEpochs = "total_epochs"
-        case currentStep = "current_step"
-        case totalSteps = "total_steps"
-        case validationLoss = "validation_loss"
-        case learningRate = "learning_rate"
+        case isDownloading = "is_downloading"
+        case message
+        case modelId = "model_id"
+        case totalSizeBytes = "total_size_bytes"
+        case totalSizeGb = "total_size_gb"
+        case downloadedBytes = "downloaded_bytes"
+        case downloadedGb = "downloaded_gb"
+        case progressPercentage = "progress_percentage"
+        case downloadSpeedMbps = "download_speed_mbps"
         case etaSeconds = "eta_seconds"
-        case gpuMemory = "gpu_memory"
-        case throughput
+        case etaHuman = "eta_human"
+        case filesTotal = "files_total"
+        case filesComplete = "files_complete"
+        case startedAt = "started_at"
+    }
+}
+
+/// Training job metrics (nested in response)
+struct TrainingJobMetrics: Codable {
+    let epoch: Int?
+    let step: Int?
+    let loss: Double?
+    let accuracy: Double?
+    let etaSeconds: Double?
+    let totalSteps: Int?
+    let learningRate: Double?
+    let validationLoss: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case epoch, step, loss, accuracy
+        case etaSeconds = "eta_seconds"
+        case totalSteps = "total_steps"
+        case learningRate = "learning_rate"
+        case validationLoss = "validation_loss"
+    }
+}
+
+/// Training status/progress from /jobs/{job_id}
+struct TrainingProgress: Codable {
+    let jobId: String
+    let status: String
+    let progress: Double?
+    let currentStage: String?
+    let metrics: TrainingJobMetrics?
+    let error: String?
+    let topLevelLoss: Double?  // Top-level loss from API
+    let isLoadingModel: Bool?  // True when model is being loaded/downloaded
+
+    // Computed properties for UI compatibility
+    var progressValue: Double { progress ?? 0 }
+    var currentEpoch: Int { metrics?.epoch ?? 0 }
+    var totalEpochs: Int { 0 }  // Not provided by backend - parse from currentStage if needed
+    var currentStep: Int { metrics?.step ?? 0 }
+    var totalSteps: Int { metrics?.totalSteps ?? 0 }
+    var loss: Double { topLevelLoss ?? metrics?.loss ?? 0 }
+    var accuracy: Double? { metrics?.accuracy }
+    var validationLoss: Double? { metrics?.validationLoss }
+    var learningRate: Double { metrics?.learningRate ?? 0 }
+    var etaSeconds: Double? { metrics?.etaSeconds }
+    var isLoading: Bool { isLoadingModel ?? false }
+
+    enum CodingKeys: String, CodingKey {
+        case jobId = "job_id"
+        case status, progress, metrics, error
+        case currentStage = "current_stage"
+        case topLevelLoss = "loss"
+        case isLoadingModel = "is_loading_model"
     }
 }
 
@@ -1106,6 +1167,7 @@ struct TrainingJobStatus: Codable, Identifiable {
     let startedAt: String?
     let completedAt: String?
     let error: String?
+    let loss: Double?  // Top-level loss from API (latest training loss)
 
     var id: String { jobId }
 
@@ -1115,9 +1177,12 @@ struct TrainingJobStatus: Codable, Identifiable {
     var currentEpoch: Int { metrics?.epoch ?? 0 }
     var totalEpochs: Int { config?.epochs ?? 1 }
 
+    /// Get the current loss value - prefers top-level loss, falls back to metrics
+    var currentLoss: Double? { loss ?? metrics?.loss }
+
     enum CodingKeys: String, CodingKey {
         case jobId = "job_id"
-        case status, progress, metrics, config, error
+        case status, progress, metrics, config, error, loss
         case currentStage = "current_stage"
         case jobType = "job_type"
         case runName = "run_name"

@@ -1099,7 +1099,7 @@ actor APIClient {
     /// List available training models
     func listTrainingModels() async throws -> TrainingModelsResponse {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/models") else {
+        guard let url = URL(string: "\(base)/training/models/available") else {
             throw APIError.invalidURL
         }
 
@@ -1159,7 +1159,48 @@ actor APIClient {
     /// Get training progress
     func getTrainingProgress(jobId: String) async throws -> TrainingProgress {
         let base = await baseURL
-        guard let url = URL(string: "\(base)/training/\(jobId)/status") else {
+        guard let url = URL(string: "\(base)/jobs/\(jobId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+
+        // Debug: Print raw JSON response
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw APIError.networkError(error)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorMessage = String(data: data, encoding: .utf8)
+            throw APIError.serverError(httpResponse.statusCode, errorMessage)
+        }
+
+        // Print raw JSON for debugging
+        if let jsonString = String(data: data, encoding: .utf8) {
+            print("\u{001B}[35m[API DEBUG] Raw JSON from /jobs/\(jobId):\u{001B}[0m")
+            print("\u{001B}[33m\(jsonString)\u{001B}[0m")
+        }
+
+        do {
+            return try decoder.decode(TrainingProgress.self, from: data)
+        } catch {
+            print("\u{001B}[31m[API DEBUG] Decoding error: \(error)\u{001B}[0m")
+            throw APIError.decodingError(error)
+        }
+    }
+
+    /// Get model download progress for a training job
+    func getDownloadProgress(jobId: String) async throws -> DownloadProgress {
+        let base = await baseURL
+        guard let url = URL(string: "\(base)/training/jobs/\(jobId)/download") else {
             throw APIError.invalidURL
         }
 

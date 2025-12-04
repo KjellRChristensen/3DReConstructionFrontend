@@ -1,5 +1,51 @@
 import SwiftUI
 
+// MARK: - Debug Logging with Colors
+
+private enum LogColor: String {
+    case reset = "\u{001B}[0m"
+    case red = "\u{001B}[31m"
+    case green = "\u{001B}[32m"
+    case yellow = "\u{001B}[33m"
+    case blue = "\u{001B}[34m"
+    case magenta = "\u{001B}[35m"
+    case cyan = "\u{001B}[36m"
+    case white = "\u{001B}[37m"
+    case boldRed = "\u{001B}[1;31m"
+    case boldGreen = "\u{001B}[1;32m"
+    case boldYellow = "\u{001B}[1;33m"
+    case boldBlue = "\u{001B}[1;34m"
+    case boldCyan = "\u{001B}[1;36m"
+}
+
+private func logTraining(_ message: String, color: LogColor = .cyan) {
+    print("\(color.rawValue)[Training]\(LogColor.reset.rawValue) \(message)")
+}
+
+private func logSuccess(_ message: String) {
+    print("\(LogColor.boldGreen.rawValue)[Training] ✓\(LogColor.reset.rawValue) \(LogColor.green.rawValue)\(message)\(LogColor.reset.rawValue)")
+}
+
+private func logError(_ message: String) {
+    print("\(LogColor.boldRed.rawValue)[Training] ✗\(LogColor.reset.rawValue) \(LogColor.red.rawValue)\(message)\(LogColor.reset.rawValue)")
+}
+
+private func logWarning(_ message: String) {
+    print("\(LogColor.boldYellow.rawValue)[Training] ⚠\(LogColor.reset.rawValue) \(LogColor.yellow.rawValue)\(message)\(LogColor.reset.rawValue)")
+}
+
+private func logInfo(_ message: String) {
+    print("\(LogColor.blue.rawValue)[Training]\(LogColor.reset.rawValue) \(message)")
+}
+
+private func logData(_ label: String, _ value: String) {
+    print("\(LogColor.magenta.rawValue)[Training]\(LogColor.reset.rawValue)   \(label): \(LogColor.white.rawValue)\(value)\(LogColor.reset.rawValue)")
+}
+
+private func logHeader(_ message: String) {
+    print("\(LogColor.boldCyan.rawValue)[Training] ========== \(message) ==========\(LogColor.reset.rawValue)")
+}
+
 struct TrainingTab: View {
     @StateObject private var viewModel = TrainingPipelineViewModel()
     @State private var selectedSection: TrainingSection = .datasets
@@ -85,7 +131,7 @@ struct TrainingTab: View {
     private var datasetsList: some View {
         List {
             // Ready for Training
-            let readyDatasets = viewModel.serverDatasets.filter { $0.status.isReady }
+            let readyDatasets = viewModel.serverDatasets.filter { $0.isReady }
             if !readyDatasets.isEmpty {
                 Section {
                     ForEach(readyDatasets) { dataset in
@@ -103,7 +149,7 @@ struct TrainingTab: View {
             }
 
             // Processing
-            let processingDatasets = viewModel.serverDatasets.filter { $0.status.isProcessing }
+            let processingDatasets = viewModel.serverDatasets.filter { $0.status == "processing" }
             if !processingDatasets.isEmpty {
                 Section {
                     ForEach(processingDatasets) { dataset in
@@ -119,7 +165,7 @@ struct TrainingTab: View {
             }
 
             // Other statuses
-            let otherDatasets = viewModel.serverDatasets.filter { !$0.status.isReady && !$0.status.isProcessing }
+            let otherDatasets = viewModel.serverDatasets.filter { !$0.isReady && $0.status != "processing" }
             if !otherDatasets.isEmpty {
                 Section {
                     ForEach(otherDatasets) { dataset in
@@ -230,14 +276,6 @@ struct TrainingTab: View {
                 Section {
                     Stepper("Epochs: \(viewModel.trainingConfig.epochs)", value: $viewModel.trainingConfig.epochs, in: 1...100)
 
-                    Picker("Batch Size", selection: $viewModel.trainingConfig.batchSize) {
-                        Text("1").tag(1)
-                        Text("2").tag(2)
-                        Text("4").tag(4)
-                        Text("8").tag(8)
-                    }
-                    .pickerStyle(.segmented)
-
                     HStack {
                         Text("Learning Rate")
                         Spacer()
@@ -249,6 +287,18 @@ struct TrainingTab: View {
                         get: { log10(viewModel.trainingConfig.learningRate) },
                         set: { viewModel.trainingConfig.learningRate = pow(10, $0) }
                     ), in: -6...(-3), step: 0.5)
+
+                    HStack {
+                        Text("Batch Size")
+                        Spacer()
+                        Text("\(viewModel.trainingConfig.batchSize)")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(value: Binding(
+                        get: { Double(viewModel.trainingConfig.batchSize) },
+                        set: { viewModel.trainingConfig.batchSize = Int($0) }
+                    ), in: 1...64, step: 1)
 
                     Toggle("Use LoRA", isOn: $viewModel.trainingConfig.useLoRA)
 
@@ -262,8 +312,12 @@ struct TrainingTab: View {
                         }
                         .pickerStyle(.segmented)
                     }
+
+                    Toggle("Use MPS (Metal)", isOn: $viewModel.trainingConfig.useMps)
                 } header: {
                     Text("Training Parameters")
+                } footer: {
+                    Text(viewModel.trainingConfig.useMps ? "Device: mps" : "Device: cpu (for debugging)")
                 }
 
                 // Actions
@@ -291,7 +345,7 @@ struct TrainingTab: View {
                         Task { await viewModel.startTraining() }
                     } label: {
                         HStack {
-                            if viewModel.isTraining {
+                            if viewModel.isTraining && !(viewModel.activeTrainingJob?.isLoading ?? false) {
                                 ProgressView()
                                     .padding(.trailing, 8)
                             }
@@ -300,6 +354,20 @@ struct TrainingTab: View {
                         }
                     }
                     .disabled(viewModel.isRunningTest || viewModel.isTraining)
+
+                    // Loading Model indicator (shown when model is loading)
+                    if let activeJob = viewModel.activeTrainingJob, activeJob.isLoading {
+                        HStack {
+                            ProgressView()
+                                .padding(.trailing, 8)
+                            Label("Loading Model", systemImage: "cpu")
+                                .foregroundStyle(.orange)
+                            Spacer()
+                            Text(activeJob.currentStage ?? "Please wait...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 } footer: {
                     Text("Run a quick test first to verify convergence before starting full training.")
                 }
@@ -310,6 +378,7 @@ struct TrainingTab: View {
                 Section {
                     ActiveTrainingJobView(
                         progress: activeJob,
+                        downloadProgress: viewModel.downloadProgress,
                         onStop: {
                             Task { await viewModel.stopTraining() }
                         }
@@ -420,7 +489,7 @@ struct ServerDatasetRow: View {
                             .font(.headline)
                             .foregroundStyle(.primary)
 
-                        Text("\(dataset.samples.formatted()) samples")
+                        Text("\(dataset.trainSamples.formatted()) train / \(dataset.valSamples.formatted()) val")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -436,30 +505,12 @@ struct ServerDatasetRow: View {
                     }
                 }
 
-                // Progress bars for processing states
-                if dataset.status.isProcessing {
-                    if let progress = dataset.renderProgress, dataset.status == .rendering {
-                        ProgressView(value: progress)
-                        Text("Rendering: \(Int(progress * 100))%")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let progress = dataset.conversionProgress, dataset.status == .converting {
-                        ProgressView(value: progress)
-                        Text("Converting: \(Int(progress * 100))%")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 // Info row
                 HStack(spacing: 12) {
-                    Label(dataset.format, systemImage: "doc.text")
+                    Label("\(dataset.models.formatted()) models", systemImage: "cube.box")
+                    Label("\(dataset.images.formatted()) images", systemImage: "photo")
                     if let size = dataset.size {
                         Label(size, systemImage: "externaldrive")
-                    }
-                    if !dataset.compatibleModels.isEmpty {
-                        Label("\(dataset.compatibleModels.count) models", systemImage: "cpu")
                     }
                 }
                 .font(.caption)
@@ -473,10 +524,10 @@ struct ServerDatasetRow: View {
 }
 
 struct StatusBadge: View {
-    let status: DatasetStatus
+    let status: String
 
     var body: some View {
-        Text(status.displayName)
+        Text(displayName)
             .font(.caption)
             .fontWeight(.medium)
             .padding(.horizontal, 8)
@@ -486,12 +537,21 @@ struct StatusBadge: View {
             .clipShape(Capsule())
     }
 
+    private var displayName: String {
+        switch status {
+        case "ready": return "Ready"
+        case "processing": return "Processing..."
+        case "error": return "Error"
+        default: return status.capitalized
+        }
+    }
+
     private var backgroundColor: Color {
         switch status {
-        case .ready: return .green
-        case .extracting, .rendering, .converting, .validating: return .blue
-        case .extracted, .rendered, .converted: return .orange
-        case .error: return .red
+        case "ready": return .green
+        case "processing": return .blue
+        case "error": return .red
+        default: return .orange
         }
     }
 }
@@ -508,7 +568,7 @@ struct SelectedDatasetCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(dataset.name)
                         .font(.headline)
-                    Text("\(dataset.samples.formatted()) samples | \(dataset.format)")
+                    Text("\(dataset.trainSamples.formatted()) train / \(dataset.valSamples.formatted()) val samples")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -524,11 +584,15 @@ struct SelectedDatasetCard: View {
                 .buttonStyle(.plain)
             }
 
-            if !dataset.compatibleModels.isEmpty {
-                Text("Compatible with: \(dataset.compatibleModels.joined(separator: ", "))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Label("\(dataset.models.formatted()) models", systemImage: "cube.box")
+                Label("\(dataset.images.formatted()) images", systemImage: "photo")
+                if let size = dataset.size {
+                    Label(size, systemImage: "externaldrive")
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -547,11 +611,11 @@ struct ModelSelectionRow: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(model.name)
+                        Text(model.displayName)
                             .font(.headline)
                             .foregroundStyle(.primary)
 
-                        if model.recommended == true {
+                        if model.recommendedForCad {
                             Text("Recommended")
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
@@ -559,6 +623,12 @@ struct ModelSelectionRow: View {
                                 .background(.green.opacity(0.2))
                                 .foregroundStyle(.green)
                                 .clipShape(Capsule())
+                        }
+
+                        if model.verified {
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundStyle(.blue)
+                                .font(.caption)
                         }
                     }
 
@@ -569,7 +639,10 @@ struct ModelSelectionRow: View {
 
                     HStack(spacing: 12) {
                         Label(model.parameters, systemImage: "slider.horizontal.3")
-                        Label(model.vram, systemImage: "memorychip")
+                        Label("\(model.minVramGb)GB VRAM", systemImage: "memorychip")
+                        if model.supportsLora {
+                            Label("LoRA", systemImage: "sparkles")
+                        }
                     }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -593,61 +666,150 @@ struct ModelSelectionRow: View {
     }
 }
 
-// MARK: - Active Training Job View
+// MARK: - Download Progress View
 
-struct ActiveTrainingJobView: View {
-    let progress: TrainingProgress
-    let onStop: () -> Void
+struct DownloadProgressView: View {
+    let download: DownloadProgress
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Progress bar
-            VStack(spacing: 4) {
-                ProgressView(value: progress.progress)
-
-                HStack {
-                    Text("Epoch \(progress.currentEpoch)/\(progress.totalEpochs)")
-                    Spacer()
-                    Text("\(Int(progress.progress * 100))%")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            // Metrics grid
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 8) {
-                MetricCell(label: "Loss", value: String(format: "%.4f", progress.loss))
-                if let valLoss = progress.validationLoss {
-                    MetricCell(label: "Val Loss", value: String(format: "%.4f", valLoss))
-                }
-                if let accuracy = progress.accuracy {
-                    MetricCell(label: "Accuracy", value: String(format: "%.1f%%", accuracy * 100))
-                }
-                MetricCell(label: "Step", value: "\(progress.currentStep)/\(progress.totalSteps)")
-                MetricCell(label: "LR", value: String(format: "%.2e", progress.learningRate))
-                if let eta = progress.etaSeconds {
-                    MetricCell(label: "ETA", value: formatTime(Double(eta)))
-                }
-            }
-            .padding(8)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            // GPU info
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                if let gpu = progress.gpuMemory {
-                    Label(gpu, systemImage: "memorychip")
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.blue)
+                Text("Downloading Model")
+                    .font(.headline)
+                Spacer()
+                Text(String(format: "%.1f%%", download.progressPercentage ?? 0))
+                    .font(.headline)
+                    .foregroundStyle(.blue)
+            }
+
+            ProgressView(value: (download.progressPercentage ?? 0) / 100)
+                .tint(.blue)
+
+            HStack {
+                if let downloadedGb = download.downloadedGb, let totalGb = download.totalSizeGb {
+                    Label(String(format: "%.1f / %.1f GB", downloadedGb, totalGb), systemImage: "internaldrive")
                 }
-                if let throughput = progress.throughput {
-                    Label(throughput, systemImage: "speedometer")
+                Spacer()
+                if let speed = download.downloadSpeedMbps {
+                    Label(String(format: "%.1f MB/s", speed), systemImage: "speedometer")
                 }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            HStack {
+                if let filesComplete = download.filesComplete, let filesTotal = download.filesTotal {
+                    Label("\(filesComplete)/\(filesTotal) files", systemImage: "doc.on.doc")
+                }
+                Spacer()
+                if let eta = download.etaHuman {
+                    Label("ETA: \(eta)", systemImage: "clock")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(Color.blue.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Model Loading View
+
+struct ModelLoadingView: View {
+    let stage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                ProgressView()
+                    .scaleEffect(1.2)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Loading Model")
+                        .font(.headline)
+
+                    Text(stage ?? "Initializing...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            Text("This may take a few minutes for large models. The model weights are being loaded into memory.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(Color.orange.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Active Training Job View
+
+struct ActiveTrainingJobView: View {
+    let progress: TrainingProgress
+    let downloadProgress: DownloadProgress?
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Show download progress if downloading
+            if let download = downloadProgress, download.isDownloading {
+                DownloadProgressView(download: download)
+            }
+
+            // Show model loading state
+            if progress.isLoading {
+                ModelLoadingView(stage: progress.currentStage)
+            } else {
+                // Progress bar (only when actually training)
+                VStack(spacing: 4) {
+                    ProgressView(value: progress.progressValue)
+
+                    HStack {
+                        if let stage = progress.currentStage {
+                            Text(stage)
+                        } else {
+                            Text("Epoch \(progress.currentEpoch)")
+                        }
+                        Spacer()
+                        Text("\(Int(progress.progressValue * 100))%")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                // Metrics grid (only show when training, not loading)
+                if downloadProgress == nil || downloadProgress?.isDownloading == false {
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ], spacing: 8) {
+                        MetricCell(label: "Loss", value: String(format: "%.4f", progress.loss))
+                        if let valLoss = progress.validationLoss {
+                            MetricCell(label: "Val Loss", value: String(format: "%.4f", valLoss))
+                        }
+                        if let accuracy = progress.accuracy {
+                            MetricCell(label: "Accuracy", value: String(format: "%.1f%%", accuracy * 100))
+                        }
+                        MetricCell(label: "Step", value: "\(progress.currentStep)/\(progress.totalSteps)")
+                        MetricCell(label: "LR", value: String(format: "%.2e", progress.learningRate))
+                        if let eta = progress.etaSeconds {
+                            MetricCell(label: "ETA", value: formatTime(Double(eta)))
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
 
             // Stop button
             Button(role: .destructive) {
@@ -805,10 +967,16 @@ struct MetricCell: View {
 
 struct TrainingUIConfig {
     var epochs: Int = 3
-    var batchSize: Int = 2
+    var batchSize: Int = 32
     var learningRate: Double = 0.0001
     var useLoRA: Bool = true
     var loraRank: Int = 64
+    var useMps: Bool = true
+
+    /// Returns the device string for the API ("mps" or "cpu")
+    var device: String {
+        useMps ? "mps" : "cpu"
+    }
 }
 
 // MARK: - Timeout Error
@@ -842,21 +1010,22 @@ class TrainingPipelineViewModel: ObservableObject {
     // Progress
     @Published var activeTrainingJob: TrainingProgress?
     @Published var testRunResults: TestRunResults?
+    @Published var downloadProgress: DownloadProgress?
 
     private let apiClient = APIClient.shared
     private var pollingTask: Task<Void, Never>?
+    private var downloadPollingTask: Task<Void, Never>?
     private var activeJobId: String?
 
-    // Computed
+    // Computed - all models are compatible with TinyLLaVA format datasets
     var compatibleModels: [TrainingModel] {
-        guard let dataset = selectedDataset else { return [] }
-        return availableModels.filter { model in
-            dataset.compatibleModels.contains(model.id) ||
-            dataset.compatibleModels.contains(model.inputFormat)
-        }
+        guard selectedDataset != nil else { return [] }
+        // All available models support our dataset format (TinyLLaVA JSON)
+        return availableModels.filter { $0.available }
     }
 
     func loadAll() async {
+        logInfo("loadAll() - Starting data load...")
         isLoading = true
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.loadServerDatasets() }
@@ -864,57 +1033,76 @@ class TrainingPipelineViewModel: ObservableObject {
             group.addTask { await self.loadCheckpoints() }
         }
         isLoading = false
+        logSuccess("loadAll() - Completed. Datasets: \(serverDatasets.count), Models: \(availableModels.count), Checkpoints: \(checkpoints.count)")
     }
 
     func refresh() async {
+        logInfo("refresh() - Refreshing all data...")
         await loadAll()
     }
 
     func selectDataset(_ dataset: ServerDataset) {
+        logTraining("selectDataset() - Selected dataset: id=\(dataset.id), name=\(dataset.name)")
         selectedDataset = dataset
         selectedModel = nil
         testRunResults = nil
 
         // Auto-select recommended model if available
-        if let recommended = compatibleModels.first(where: { $0.recommended == true }) {
+        if let recommended = compatibleModels.first(where: { $0.recommendedForCad }) {
             selectedModel = recommended
+            logSuccess("Auto-selected recommended model: id=\(recommended.id), name=\(recommended.name)")
         } else if let first = compatibleModels.first {
             selectedModel = first
+            logInfo("Auto-selected first model: id=\(first.id), name=\(first.name)")
+        } else {
+            logWarning("No compatible models available")
         }
     }
 
     private func loadServerDatasets() async {
+        logInfo("GET /training/datasets")
         do {
             let response = try await withTimeout(seconds: 3) {
                 try await self.apiClient.listServerDatasets()
             }
             serverDatasets = response.datasets
+            logSuccess("Loaded \(response.datasets.count) datasets")
+            for ds in response.datasets {
+                logData("Dataset", "id=\(ds.id), name=\(ds.name), status=\(ds.status), samples=\(ds.totalSamples)")
+            }
         } catch {
-            // No data available - keep empty
+            logError("loadServerDatasets() failed: \(error.localizedDescription)")
             serverDatasets = []
         }
     }
 
     private func loadModels() async {
+        logInfo("GET /training/models/available")
         do {
             let response = try await withTimeout(seconds: 3) {
                 try await self.apiClient.listTrainingModels()
             }
             availableModels = response.models
+            logSuccess("Loaded \(response.models.count) models")
+            for model in response.models {
+                logData("Model", "id=\(model.id), name=\(model.name), available=\(model.available), recommended=\(model.recommendedForCad)")
+            }
         } catch {
-            // No data available - keep empty
+            logError("loadModels() failed: \(error.localizedDescription)")
             availableModels = []
         }
     }
 
     private func loadCheckpoints() async {
+        logInfo("GET /training/finetune/checkpoints")
         do {
             let response = try await withTimeout(seconds: 3) {
                 try await self.apiClient.listCheckpoints()
             }
             checkpoints = response.checkpoints
+            logSuccess("Loaded \(response.checkpoints.count) checkpoints")
         } catch {
-            // No data available - keep empty
+            logError("loadCheckpoints() failed: \(error.localizedDescription)")
             checkpoints = []
         }
     }
@@ -938,32 +1126,46 @@ class TrainingPipelineViewModel: ObservableObject {
     }
 
     func startTestRun() async {
-        guard let dataset = selectedDataset, let model = selectedModel else { return }
+        guard let dataset = selectedDataset, let model = selectedModel else {
+            logWarning("startTestRun() - Aborted: No dataset or model selected")
+            return
+        }
+
+        logHeader("TEST RUN")
+        logData("Dataset", "id=\(dataset.id), name=\(dataset.name)")
+        logData("Model", "id=\(model.id), name=\(model.name)")
 
         isRunningTest = true
         testRunResults = nil
 
         do {
             let request = TestRunRequest(
-                datasetName: dataset.name,
+                datasetId: dataset.id,
                 modelId: model.id,
                 epochs: 5,
-                batchSize: trainingConfig.batchSize
+                batchSize: trainingConfig.batchSize,
+                device: trainingConfig.device
             )
+            logInfo("POST /training/test-run")
+            logData("Payload", "{dataset_id: \(request.datasetId), model_id: \(request.modelId), epochs: \(request.epochs), batch_size: \(request.batchSize), device: \(request.device)}")
+
             let response = try await withTimeout(seconds: 10) {
                 try await self.apiClient.startTestRun(request: request)
             }
             activeJobId = response.jobId
+            logSuccess("Test run started: job_id=\(response.jobId)")
 
             // Poll for results
             await pollForTestResults(jobId: response.jobId)
         } catch {
+            logError("startTestRun() failed: \(error.localizedDescription)")
             self.error = error.localizedDescription
             isRunningTest = false
         }
     }
 
     private func pollForTestResults(jobId: String) async {
+        logInfo("Polling for test results: job_id=\(jobId)")
         var pollCount = 0
         let maxPolls = 100 // Max 5 minutes (100 * 3 seconds)
 
@@ -975,73 +1177,118 @@ class TrainingPipelineViewModel: ObservableObject {
                 let results = try await withTimeout(seconds: 5) {
                     try await self.apiClient.getTestRunResults(jobId: jobId)
                 }
+                logSuccess("Test results received after \(pollCount) polls")
+                logData("Results", "success=\(results.success), initialLoss=\(results.initialLoss), finalLoss=\(results.finalLoss)")
                 testRunResults = results
                 isRunningTest = false
                 return
             } catch {
-                // Still running or timeout, continue polling
+                if pollCount % 5 == 0 {
+                    logWarning("Poll #\(pollCount): Still waiting...")
+                }
             }
         }
 
         // Timeout after max polls
         if isRunningTest {
+            logError("Test run polling timed out after \(pollCount) polls")
             isRunningTest = false
             self.error = "Test run polling timed out"
         }
     }
 
     func startTraining() async {
-        guard let dataset = selectedDataset, let model = selectedModel else { return }
+        guard let dataset = selectedDataset, let model = selectedModel else {
+            logWarning("startTraining() - Aborted: No dataset or model selected")
+            return
+        }
+
+        logHeader("STARTING TRAINING")
+        logData("Dataset", "id=\(dataset.id), name=\(dataset.name)")
+        logData("Model", "id=\(model.id), name=\(model.name)")
+        logData("Config", "epochs=\(trainingConfig.epochs), batchSize=\(trainingConfig.batchSize), useLora=\(trainingConfig.useLoRA), device=\(trainingConfig.device)")
 
         isTraining = true
 
         do {
             let request = TrainingStartRequest(
-                datasetName: dataset.name,
+                datasetId: dataset.id,
                 modelId: model.id,
                 epochs: trainingConfig.epochs,
                 batchSize: trainingConfig.batchSize,
                 learningRate: trainingConfig.learningRate,
-                loraRank: trainingConfig.useLoRA ? trainingConfig.loraRank : nil,
-                runName: nil
+                useLora: trainingConfig.useLoRA,
+                device: trainingConfig.device
             )
+
+            logInfo("POST /training/start")
+            logData("Payload", "{\"dataset_id\": \(request.datasetId), \"model_id\": \(request.modelId), \"epochs\": \(request.epochs), \"batch_size\": \(request.batchSize), \"learning_rate\": \(request.learningRate), \"use_lora\": \(request.useLora), \"device\": \"\(request.device)\"}")
+
             let response = try await withTimeout(seconds: 10) {
                 try await self.apiClient.startTrainingPipeline(request: request)
             }
             activeJobId = response.jobId
 
+            logSuccess("Training job created!")
+            logData("job_id", response.jobId)
+            logData("status", response.status)
+            logData("dataset", response.dataset ?? "n/a")
+            logData("model", response.model ?? "n/a")
+            logData("message", response.message)
+
             // Start polling for progress
             startProgressPolling(jobId: response.jobId)
         } catch {
+            logError("startTraining() FAILED!")
+            logError("Error: \(error.localizedDescription)")
+            if let apiError = error as? APIError {
+                logError("APIError details: \(apiError)")
+            }
             self.error = error.localizedDescription
             isTraining = false
         }
     }
 
     func stopTraining() async {
-        guard let jobId = activeJobId else { return }
+        guard let jobId = activeJobId else {
+            logWarning("stopTraining() - No active job to stop")
+            return
+        }
+
+        logWarning("Stopping training job: \(jobId)")
 
         do {
             _ = try await withTimeout(seconds: 5) {
                 try await self.apiClient.stopTraining(jobId: jobId)
             }
+            logSuccess("Training stopped successfully")
             pollingTask?.cancel()
             pollingTask = nil
             isTraining = false
             activeTrainingJob = nil
             activeJobId = nil
         } catch {
+            logError("stopTraining() failed: \(error.localizedDescription)")
             self.error = error.localizedDescription
         }
     }
 
     private func startProgressPolling(jobId: String) {
+        logInfo("Starting progress polling for job: \(jobId)")
+        logInfo("GET /jobs/\(jobId)")
         pollingTask?.cancel()
+        downloadPollingTask?.cancel()
+
+        // Start download progress polling
+        startDownloadPolling(jobId: jobId)
+
         pollingTask = Task {
             var consecutiveFailures = 0
             let maxConsecutiveFailures = 10 // Stop after 10 consecutive failures
+            var pollCount = 0
 
             while !Task.isCancelled && isTraining {
+                pollCount += 1
                 do {
                     let progress = try await withTimeout(seconds: 5) {
                         try await self.apiClient.getTrainingProgress(jobId: jobId)
@@ -1049,18 +1296,39 @@ class TrainingPipelineViewModel: ObservableObject {
                     activeTrainingJob = progress
                     consecutiveFailures = 0 // Reset on success
 
-                    if progress.status == "completed" || progress.status == "failed" {
+                    let progressPct = String(format: "%.1f%%", (progress.progress ?? 0) * 100)
+                    let lossStr = String(format: "%.4f", progress.loss)
+                    let stage = progress.currentStage ?? "unknown"
+                    let loadingStr = progress.isLoading ? " [LOADING MODEL]" : ""
+                    logTraining("Poll #\(pollCount): status=\(progress.status), progress=\(progressPct), stage=\(stage), loss=\(lossStr)\(loadingStr)", color: progress.isLoading ? .yellow : .white)
+
+                    if progress.status == "completed" {
+                        logSuccess("Training completed!")
                         isTraining = false
-                        if progress.status == "completed" {
-                            await loadCheckpoints()
+                        downloadPollingTask?.cancel()
+                        downloadProgress = nil
+                        logInfo("Loading updated checkpoints...")
+                        await loadCheckpoints()
+                        break
+                    } else if progress.status == "failed" {
+                        logError("Training failed!")
+                        if let errorMsg = progress.error {
+                            logError("Error: \(errorMsg)")
+                            self.error = errorMsg
                         }
+                        isTraining = false
+                        downloadPollingTask?.cancel()
+                        downloadProgress = nil
                         break
                     }
                 } catch {
                     consecutiveFailures += 1
+                    logError("Poll #\(pollCount): Failed (\(consecutiveFailures)/\(maxConsecutiveFailures)) - \(error.localizedDescription)")
                     if consecutiveFailures >= maxConsecutiveFailures {
+                        logError("Too many failures - stopping polling")
                         self.error = "Lost connection to training server"
                         isTraining = false
+                        downloadPollingTask?.cancel()
                         break
                     }
                     // Continue polling on transient errors
@@ -1068,17 +1336,60 @@ class TrainingPipelineViewModel: ObservableObject {
 
                 try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
             }
+            logInfo("Progress polling ended")
             pollingTask = nil
         }
     }
 
+    private func startDownloadPolling(jobId: String) {
+        logInfo("Starting download polling for job: \(jobId)")
+        logInfo("GET /training/jobs/\(jobId)/download")
+        downloadPollingTask = Task {
+            var downloadPollCount = 0
+            while !Task.isCancelled && isTraining {
+                downloadPollCount += 1
+                do {
+                    let download = try await withTimeout(seconds: 3) {
+                        try await self.apiClient.getDownloadProgress(jobId: jobId)
+                    }
+
+                    if download.isDownloading {
+                        downloadProgress = download
+                        let pctStr = download.progressPercentage.map { String(format: "%.1f%%", $0) } ?? "..."
+                        let speedStr = download.downloadSpeedMbps.map { String(format: "%.1f MB/s", $0) } ?? "..."
+                        let etaStr = download.etaHuman ?? "..."
+                        let filesStr = "\(download.filesComplete ?? 0)/\(download.filesTotal ?? 0)"
+                        logTraining("Download #\(downloadPollCount): \(pctStr) | \(speedStr) | ETA: \(etaStr) | Files: \(filesStr)", color: .yellow)
+                    } else {
+                        // Download complete or not started
+                        if downloadProgress != nil {
+                            logSuccess("Model download complete!")
+                            downloadProgress = nil
+                        } else if let msg = download.message {
+                            logInfo("Download #\(downloadPollCount): \(msg)")
+                        }
+                    }
+                } catch {
+                    logWarning("Download #\(downloadPollCount): \(error.localizedDescription)")
+                }
+
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            }
+            logInfo("Download polling ended")
+            downloadPollingTask = nil
+        }
+    }
+
     func deleteCheckpoint(_ name: String) async {
+        logWarning("Deleting checkpoint: \(name)")
         do {
             _ = try await withTimeout(seconds: 5) {
                 try await self.apiClient.deleteCheckpoint(name: name)
             }
+            logSuccess("Checkpoint deleted: \(name)")
             await loadCheckpoints()
         } catch {
+            logError("deleteCheckpoint() failed: \(error.localizedDescription)")
             self.error = error.localizedDescription
         }
     }
